@@ -1,0 +1,17 @@
+- VoD Streaming
+  - tstart para posicionamiento: TS, FLV, MP4
+- El servidor conoce y tiene datos acerca de las conexiones activas
+- Servicio de tickets
+  - Existe un servicio central para los servers para consultar si un medio
+    esta protegido por ticket
+- Servicio de cuentas
+- Recorder como demonio que conoce su estado de grabacion
+  - Segmentos disponibles
+  - grabaciones  Pausadas/Arrancadas/Planificaciones
+- flv reencapsulation
+  - CPU for FLV is too higher
+  - Kill subprocess (server)
+- Fichero de configuración para el server
+- Fichero de configuración para el recorder
+- Limite inferior para la reproduccion (si la peticion es de muy del pasado,
+  no se hae play)

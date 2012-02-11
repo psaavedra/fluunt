@@ -1,0 +1,908 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+import os
+import sys
+
+import bottle
+from bottle import route, run, view
+# from bottle import hook
+from bottle import abort, request, response
+
+from optparse import OptionParser
+
+import time
+from datetime import datetime
+import calendar
+
+import signal
+import subprocess
+
+LOG_FILE = "./server.log"
+LOG_FILE_FD = None
+LOG_SEVERITIES = \
+    ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"]
+VERBOSITY_LEVEL = LOG_SEVERITIES[6]
+
+CACHE_LISTDIR_TIME=10
+STREAM_NOLIMIT=False
+
+# SUBPROCESS_TIMES = { <<process>>:<<epoch>>, }
+SUBPROCESS_TIMES={}
+
+cache_listdir_value = {}
+cache_listdir_timer={}
+
+
+def signal_term_handler(signal, frame):
+    global LOG_FILE_FD
+    print 'Stoppping server ... '
+    m = "Signal number %s detected. Stoppping server" % str(signal)
+    message("signal_term_handler", m, "INFO", None, None)
+
+    LOG_FILE_FD.close()
+    sys.exit(0)
+
+def signal_hup_handler(signal, frame):
+    global LOG_FILE_FD
+    print 'Reloading server ... '
+    m = "Signal number %s detected. Reloading server" % str(signal)
+    message ("signal_hup_handler",  m, "INFO", None, None)
+
+    n = LOG_FILE_FD.name
+
+    try:
+      LOG_FILE_FD.close()
+      LOG_FILE_FD = open(ops.logfile, "a+b")
+    except Exception, e:
+      print "Can not open %s file: %s" % (n, str(e))
+      sys.exit (-1)
+
+
+signal.signal(signal.SIGINT, signal_term_handler)
+signal.signal(signal.SIGTERM, signal_term_handler)
+signal.signal(signal.SIGUSR1, signal_hup_handler)
+signal.signal(signal.SIGHUP, signal_hup_handler)
+
+
+def message(module, mess, severity=LOG_SEVERITIES[6], identifier=None, peer=None):
+  global VERBOSITY_LEVEL
+  global LOG_SEVERITIES
+
+  i_s = 6
+  try:
+      i_s = LOG_SEVERITIES.index(severity)
+  except ValueError:
+      pass
+  i_l = LOG_SEVERITIES.index(VERBOSITY_LEVEL)
+
+  if i_s <= i_l:
+    res = "[%s]" % str(datetime.utcfromtimestamp(float(time.time())).isoformat())
+
+    if severity:
+      res = res + " [%s]" % str(severity).upper()
+    else:
+      res = res + " [-]"
+
+    res = res + " [%s]" % str(module)
+
+    if peer:
+      res = res + " [%s]" % str(peer)
+    else:
+      try:
+        res = res + " [%s]" % str(request.environ["REMOTE_ADDR"])
+      except:
+        res = res + " [-]"
+
+    if identifier:
+      res = res + " [%s]" % str(identifier)
+    else:
+      res = res + " [-]"
+
+    res = res + " " + str(mess)
+
+    LOG_FILE_FD.write(res + "\n")
+    LOG_FILE_FD.flush()
+
+
+def get_listdir(dirname):
+  global CACHE_LISTDIR_TIME
+  global cache_listdir_timer
+  global cache_listdir_value
+
+  try:
+    timer = 0
+    if cache_listdir_timer.has_key(dirname):
+        timer = cache_listdir_timer[dirname]
+
+    current_time = time.time()
+    if current_time > timer + CACHE_LISTDIR_TIME:
+        files = os.listdir(dirname)
+        files.sort()
+
+        # XXX: Deleting last inclompleted files. Assuming is been writed by the
+        # recorder process
+        if len(files) > 0:
+            path = dirname + os.sep + files[-1]
+            size = os.path.getsize(path)
+
+            if size == 0:
+              files.__delitem__(-1)
+
+        cache_listdir_value[dirname] = files
+        cache_listdir_timer[dirname] = current_time
+
+  except Exception, e:
+      m = "[get_listdir] " + str(e)
+      message("get_listdir", m, "err", None, None)
+
+
+  return cache_listdir_value[dirname]
+
+def get_next_higher_filename_position(listdir, filename):
+    """
+    """
+    global cache_listdir_value
+    global cache_listdir_timer
+
+    if len(listdir)==1:
+        if listdir[0] > filename:
+            return 0
+        else:
+            # Value out of range for listdir list
+            return 1
+
+    pivot = len(listdir) / 2
+
+    if listdir[pivot] == filename:
+        return pivot
+    if listdir[pivot] < filename:
+        position = get_next_higher_filename_position(listdir[pivot:],filename)
+        return pivot + position
+    if listdir[pivot] > filename:
+        return get_next_higher_filename_position(listdir[:pivot],filename)
+
+
+def securing_string(string, strings_to_avoid=["./","*","^"]):
+    res = string
+    for c in strings_to_avoid:
+        res = res.replace(c,'')
+    if res == string:
+        return res
+    else:
+        return securing_string(res)
+
+
+def pvr_hls(timer,chunkoffset,channel_id):
+
+  # TODO: Habria que establecer un tiempo de margen en el timer
+  # por el cual se considera que una petición es demasiado antigua en el
+  # tiempo con respecto al time del primer chunk encontrado.
+
+  m =  "Channel Id: " + str(channel_id)
+  message("pvr_hls", m, "INFO", None, None)
+
+  m = ""
+  try:
+      m = "Timer set to: " + str(timer) + \
+            " (" + datetime.utcfromtimestamp(float(timer)).isoformat() + ")"
+  except Exception, e:
+      m = str(e)
+  message("pvr_hls", m, "INFO", None, None)
+
+  m =  "Chunk offset set to: " + str(chunkoffset)
+  message("pvr_hls", m, "INFO", None, None)
+
+  files = get_listdir(ops.workdir + "/ts/" + str(channel_id))
+  position  = get_next_higher_filename_position(files, str(timer))
+
+  m = ""
+  if position >= len(files):
+      m = "Position of next higher filename:" + str(position)
+  else:
+      m = "Position of next higher filename:" + str(position) \
+              + " (" + files[position] + ")"
+  message("pvr_hls", m, "debug", None, None)
+
+  if position >= len(files):
+
+      # XXX: Waiting for current recording chunks
+      m = "Waiting for current recording chunks (" \
+                + str(ops.maxchunkduration) + " seconds)"
+      message("pvr_hls", m, "warning", None, None)
+      time.sleep(int(ops.maxchunkduration))
+
+      files = get_listdir(ops.workdir + "/ts/" + str(channel_id))
+      position  = get_next_higher_filename_position(files, str(timer))
+
+      if position >= len(files):
+          m = "Returning 404 - No chunks found: position >= len(files)"
+          message("pvr_hls", m, "info", None, None)
+
+          # Petición aun no satisfacible
+          return abort(404, "No chunks found")
+
+  # Chunks found since time and chunkoffset
+  chunks = []
+  chunks_needed = int(ops.chunkstoserve)
+  # Pointer to the current chunk number to be processed by the while loop
+  current_chunk_number = int(chunkoffset)
+  # feched is activated when we found a chunk equal to the current_chunk 
+  feched = False
+  # sequence is used to send the first chunk index on the M3U8 response
+  sequence = current_chunk_number
+
+  timestamp=None
+  chunk_number=None
+  duration=None
+  # We use previous_chunk_number to found chunks discontinuities before
+  # fetching the chunks with current_chunk_number 
+  previous_chunk_number=None
+  while True:
+      if chunks_needed <= 0:
+          break
+
+      if position >= len(files):
+          break
+
+      try:
+          timestamp,duration,chunk_number = \
+            files[position].split(".ts")[0].split("_")
+          # print position
+          # print current_chunk_number
+          # print files[position]
+      except:
+          position == position + 1
+          continue
+
+      if int(chunk_number) < current_chunk_number:
+          if not feched:
+              if previous_chunk_number and \
+                 int(previous_chunk_number) > int(chunk_number):
+                     # Discontinuity found before fetch the first element.
+                     m = "Discontinuity found before fetch the first chunk"
+                     message("pvr_hls", m, "INFO", None, None)
+                     break
+              previous_chunk_number = chunk_number
+              position = position + 1
+              continue
+          else:
+              break
+
+      if int(chunk_number) == current_chunk_number:
+          feched = True
+          chunks.append(files[position])
+          current_chunk_number = current_chunk_number + 1
+          position = position + 1
+          chunks_needed = chunks_needed - 1
+          continue
+
+      if int(chunk_number) > current_chunk_number:
+          if current_chunk_number == 1:
+              current_chunk_number = int(chunk_number)
+              sequence = current_chunk_number
+          else:
+              m = "Discontinuity found"
+              message("pvr_hls", m, "INFO", None, None)
+              break
+
+
+  m = "Chunks found"
+  message("pvr_hls", m, "debug", None, None)
+
+  # Each media file URI in a Playlist has a unique sequence number.  The
+  # sequence number of a URI is equal to the sequence number of the URI
+  # that preceded it plus one.  The EXT-X-MEDIA-SEQUENCE tag indicates
+  # the sequence number of the first URI that appears in a Playlist
+  # file.
+  # Its format is:
+  #    #EXT-X-MEDIA-SEQUENCE:<number>
+
+  try:
+    m3u8_header = "#EXTM3U\n\n"
+    m3u8_header = m3u8_header + "#EXT-X-MEDIA-SEQUENCE:%s\n\n" % sequence
+    # duration = 2
+    m3u8_header = m3u8_header + "#EXT-X-TARGETDURATION:%s\n\n" \
+      % (int(duration))
+
+    m3u8_body = ""
+    for c in chunks:
+      timestamp,duration,chunk = c.split(".ts")[0].split("_")
+      m3u8_body = m3u8_body + "#EXTINF:%s,\n" % duration
+      m3u8_body = m3u8_body + ops.chunkserverpath + "/" + channel_id + "/" + c + "\n\n"
+
+    m3u8_footer = ""
+    # # EXT-X-ENDLIST cause the end of the stream
+    # if len(c) == 0:
+    #     m3u8_footer = "#EXT-X-ENDLIST\n"
+
+    m3u8 = m3u8_header + m3u8_body + m3u8_footer
+  except Exception, e:
+      m = str(e)
+      message("pvr_hls", m, "debug", None, None)
+
+
+  response.content_type = 'application/x-mpegURL'
+  return m3u8
+
+
+def get_reencapsule_process(input_, format="flv"):
+    global SUBPROCESSES
+
+    cmd= "ffmpeg  -y -i %s  -vcodec copy -acodec copy -f %s -" % (input_,format)
+    p = subprocess.Popen(cmd.split(), shell=False, bufsize=102400,
+                       stdin=subprocess.PIPE,
+                       stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE, close_fds=True)
+    SUBPROCESS_TIMES[p]=time.time()
+
+    return p
+
+def reencapsule(process):
+  # res = ""
+  # try:
+  #   for d in data:
+  #     process.stdin.write(d)
+  # except Exception, e:
+  #     print "Uy: " + str(e)
+  # print process.stderr
+  # rr = ""
+
+  # try:
+  #   for r in process.stderr:
+  #     print "B"
+  #     print r
+
+  # except Exception, e:
+  #     print "Uy: " + str(e)
+  # print "sss"    
+
+  try:
+    for r in process.stdout:
+      # print r
+      yield r
+      SUBPROCESS_TIMES[process]=time.time()
+
+  except Exception, e:
+      m =  str(e)
+      message("reencapsule", m, "error", None, None)
+      yield ""
+
+
+
+def reencapsulation_http(source, format="flv"):
+
+  if format=="flv":
+    response.content_type = 'video/x-flv'
+
+  process = get_reencapsule_process(source, format)
+
+  return reencapsule(process)
+
+
+def pvr_http(timer,channel_id,stream_limited=True):
+  _id=time.time()
+
+
+  response.content_type = 'video/mpeg2'
+
+  # TODO: Habria que establecer un tiempo de margen en el timer
+  # por el cual se considera que una petición es demasiado antigua en el
+  # tiempo con respecto al time del primer chunk encontrado.
+
+  m =  "Channel Id: " + str(channel_id)
+  message("pvr_http", m, "INFO", _id, None)
+  m = "Timer set to: " + str(timer) + \
+            " (" + datetime.utcfromtimestamp(float(timer)).isoformat() + ")"
+  message("pvr_http", m, "INFO",_id, None)
+
+  files = get_listdir(ops.workdir + "/ts/" + str(channel_id))
+  position  = get_next_higher_filename_position(files, str(timer))
+
+  m = ""
+  if position >= len(files):
+      m = "Position of next higher filename:" + str(position)
+  else:
+      m = "Position of next higher filename:" + str(position) \
+          + " (" + files[position] + ")"
+  message("pvr_http", m, "INFO",_id, None)
+
+  streaming = True
+  if position >= len(files):
+
+      # XXX: Waiting for current recording chunks
+      m = "Waiting for current recording chunks (" \
+                + str(ops.maxchunkduration) + " seconds)"
+      message("pvr_http", m, "warning",_id, None)
+      time.sleep(int(ops.maxchunkduration))
+
+      files = get_listdir(ops.workdir + "/ts/" + str(channel_id))
+      position  = get_next_higher_filename_position(files, str(timer))
+
+      if position >= len(files):
+          m = "position >= len(files): Returning 404 - No chunks found"
+          message("pvr_http", m, "INFO",_id, None)
+
+          # Petición aun no satisfacible
+          yield abort(404, "No chunks found")
+          streaming = False
+
+  timestamp=None
+  chunk_number=None
+  duration=None
+  previous_chunk_number=None
+
+
+      
+  delay = 0
+  waitings = 0
+  while streaming:
+
+      c_time_00 = time.time()
+      waitings = 0
+
+      if position >= len(files):
+          m = "Refreshing file list"
+          message("pvr_http", m, "debug",_id, None)
+
+          timestamp = int(timestamp) + 1
+
+          files = get_listdir(ops.workdir + "/ts/" + str(channel_id))
+          # XXX: Avoiding repetition of the previous chunk
+          # print timestamp
+          position  = get_next_higher_filename_position(files, str(timestamp))
+          if position >= len(files):
+              if duration:
+                try:
+                    duration = int(duration)
+                except Exception:
+                    duration = ops.maxchunkduration
+
+                # XXX: Waiting for current recording chunks
+                m = "Waiting for current recording chunks (" \
+                    + str(duration) + " seconds) (" + str(c_time_00) + ")"
+                message("pvr_http", m, "warning",_id, None)
+                time.sleep(int(duration))
+                waitings = waitings + 1
+
+                files = get_listdir(ops.workdir + "/ts/" + str(channel_id))
+                position  = get_next_higher_filename_position(files, str(timestamp))
+                if position >= len(files):
+                   m = "Breaking stream: position >= len(files)"
+                   message("pvr_http", m, "notice",_id, None)
+                   break
+
+      # m = "Position:" + str(position) + " last:" \
+      #     + str(len(files)-1) + " = " + str(len(files) - 1 - int(position))
+      # message("pvr_http", m, "INFO",_id, None)
+
+      try:
+          timestamp,duration,chunk_number = \
+            files[position].split(".ts")[0].split("_")
+          m = "Working with: " + files[position] \
+            + " (Position: " + str(position) + ")"
+          message("pvr_http", m, "debug",_id, None)
+
+      except Exception, e:
+          position = position + 1
+          continue
+
+      if previous_chunk_number:
+          # print previous_chunk_number
+          # print chunk_number
+          if not ((int (previous_chunk_number) + 1) == int(chunk_number)):
+              m = "previous_chunk_number + 1 != chunk_number: Breaking stream"
+              message("pvr_http", m, "warning",_id, None)
+              break
+
+      previous_chunk_number = int(chunk_number)
+
+      speed = 1500
+      try:
+          if stream_limited:
+            path = ops.workdir + "/ts/" + str(channel_id) + '/' \
+                 + files[position]
+            size = os.path.getsize(path)
+            speed = size / (long(duration) - delay)
+            m = "Speed: " + str(speed) + " Byte/s (" + str(size) + " /" \
+              + " (" + str(duration) + " - " + str(delay) + "))"
+            message("pvr_http", m, "debug",_id, None)
+
+            if speed <= 0:
+              m = "Speed <= 0 detected"
+              message("pvr_http", m, "warning",_id, None)
+
+              time.sleep(int(duration))
+              waitings = waitings + 1
+
+              path = ops.workdir + "/ts/" + str(channel_id) + '/' \
+                 + files[position]
+              size = os.path.getsize(path)
+              speed = size /  int(duration)
+
+            # XXX: Hack to avoid pauses
+            speed = speed * 1.1
+            m = "Speed modified: " + str(speed) + " Byte/s (" + str(size) + "/" \
+              + str(duration) + ")"
+            message("pvr_http", m, "debug",_id, None)
+
+          f = open( path , 'r')
+      except Exception, e:
+          m = "Opening ... Error:" + str(e)
+          message("pvr_http", m, "err",_id, None)
+
+      c_time_10 = time.time()
+
+      delay_10 = c_time_10 - c_time_00 - (waitings * int(duration))
+      if delay_10 < 0:
+          delay_10 = 0
+
+      t_c = 0
+      while True:
+          data = f.read(int(speed / 16.0))
+                    
+          if not data:
+              break
+              
+          yield data
+          if stream_limited:
+            t_c = t_c + 0.0625
+            time.sleep(0.0625)
+
+      c_time_20 = time.time()
+
+      delay_20 = c_time_20 - c_time_10 - t_c
+
+      f.close()
+
+      position = position + 1
+
+      c_time_30 = time.time()
+      delay_30 = c_time_30 - c_time_20
+      delay = delay_10 + delay_20 + delay_30
+
+      m = "Delay: " + str(delay_10) + " + " \
+          + str(delay_20) + " + " + str(delay_30) + " = " + str(delay)
+      message("pvr_http", m, "debug",_id, None)
+
+
+
+################################################################################
+
+parser = OptionParser()
+
+parser.add_option("-w", "--workdir", dest="workdir", default=".",
+        help="Work directory (default: .)")
+
+parser.add_option("-C", "--chunkserverpath", dest="chunkserverpath",
+        help="Chunk server path (default: http://localhost/ts/)",
+        default="http://localhost/ts/")
+
+parser.add_option("-P", "--prefixpath", dest="prefixpath",
+        help="Path of indexer (default: '')",
+        default="")
+
+parser.add_option("-i", "--ip", dest="ip",
+        help="Listen IP (default: 127.0.0.1)",
+        default="127.0.0.1")
+
+parser.add_option("-p", "--port", dest="port",
+       help="Listen port (default: 9002)",
+       default=9002, type="int")
+
+parser.add_option("-T", "--cachetimeout", dest="cachetimeout",
+       help="Cache timeout (default: 10). Must be minor than \
+maxchunkduration value",
+       default=10, type="int")
+
+parser.add_option("-M", "--maxchunkduration", dest="maxchunkduration",
+       help="Chunk duration (default: 30)",
+       default=30, type="int")
+
+parser.add_option("-F", "--fastcgi",
+        action="store_true", dest="fcgi", default=False,
+        help="Run as FastCGI server")
+
+parser.add_option("-v", "--verbose",
+        dest="verbose", default="INFO",
+        help="Verbosity level (default: %s) (ops: %s)"
+            % (str(VERBOSITY_LEVEL),str(LOG_SEVERITIES)))
+
+parser.add_option("-L", "--logfile",
+        dest="logfile", default=LOG_FILE,
+        help="Log file (default: %s)" % LOG_FILE)
+
+parser.add_option("-c", "--chunkstoserve", dest="chunkstoserve",
+       help="Chunks to serve (default: 4)",
+       default=4, type="int")
+
+(ops, args) = parser.parse_args()
+
+# if sys.argv.__len__() > 1:
+#     (ops, sys.argv) = parser.parse_args()
+# else:
+#     parser.print_help()
+#     exit (-1)
+
+
+################################################################################
+
+
+PREFIX_PATH = ops.prefixpath
+CACHE_LISTDIR_TIME = ops.cachetimeout
+
+try:
+    LOG_FILE_FD = open(ops.logfile, "a+b")
+except Exception, e:
+    print "Can not open %s file: %s" % (ops.logfile, str(e))
+    sys.exit (-1)
+
+v = ops.verbose.lower()
+if LOG_SEVERITIES.__contains__(v):
+    VERBOSITY_LEVEL = v
+
+m = "Starting server"
+message("main", m, "INFO", None, None)
+
+m = "Verbosity level set to: %s" % VERBOSITY_LEVEL
+message("main", m, "INFO", None, None)
+
+
+################################################################################
+
+
+
+# @hook('after_request')
+# def enable_cors():
+#     print "Hola"
+
+
+
+@route(PREFIX_PATH +  '/reencapsulation/:format_')
+def reencapsulation_http_url(format_):
+    source = ""
+    if request.GET.get('source'):
+        source = request.GET.get('source')
+    m = "Source: " + source
+    message("reencapsulation_http_url", m, "debug",None, None)
+
+    return reencapsulation_http(source, format_)
+
+
+@route(PREFIX_PATH +  '/pvr/channels')
+def pvr_channels():
+  """
+  """
+
+  files = get_listdir(ops.workdir + "/ts/" )
+
+  res = {}
+  res["channels"] = files
+
+  return res
+
+
+
+
+@route(PREFIX_PATH +  '/pvr/:channel_id/hls.m3u8')
+def pvr_hls_parameters(channel_id):
+  """
+  For example:
+    channel_id = divinity_udp_239.192.201.5_1234
+    or
+    channel_id = divinitybyhttp
+  """
+
+  # Securization of channel_id value.
+  channel_id = securing_string(channel_id)
+
+  if not os.path.exists(ops.workdir + "/ts/" + str(channel_id)):
+      return abort(404, "Channel id. not found")
+
+  # Suring access to files entries cached
+  timer = int(time.time()) - ops.maxchunkduration * 2
+
+  if request.GET.get('time'):
+      timer = request.GET.get('time')
+  else:
+      m = "Not time parameter received"
+      message("pvr_hls_parameters", m, "debug",None, None)
+
+      # date example: 2011-10-14_5:29:43
+      if request.GET.get('date'):
+            date = request.GET.get('date')
+            try:
+                date_object = datetime.strptime(date, '%Y-%m-%d_%H:%M:%S')
+                timer = int(calendar.timegm(date_object.utctimetuple()))
+            except ValueError:
+                m = "Incorrect date format. Expected: %Y-%m-%d_%H:%M:%S"
+                message("pvr_hls_parameters", m, "warning",None, None)
+      else:
+          m = "Not date parameter received"
+          message("pvr_hls_parameters", m, "debug",None, None)
+
+  chunkoffset = 1
+  try:
+      chunkoffset = int(request.GET.get('chunkoffset'))
+  except Exception, e:
+      m = "Not chunkoffset parameter received"
+      message("pvr_hls_parameters", m, "debug",None, None)
+
+  return pvr_hls(timer,chunkoffset,channel_id)
+
+
+
+
+@route(PREFIX_PATH +  '/pvr/:channel_id/segments')
+def pvr_segments(channel_id):
+  """
+  For example:
+    channel_id = divinity_udp_239.192.201.5_1234
+    or
+    channel_id = divinitybyhttp
+  """
+
+  # Securization of channel_id value.
+  channel_id = securing_string(channel_id)
+
+  if not os.path.exists(ops.workdir + "/ts/" + str(channel_id)):
+      return abort(404, "Channel id. not found")
+
+  files = get_listdir(ops.workdir + "/ts/" + str(channel_id))
+
+  res = {}
+  extra = {}
+  extra["num_of_chunks"]= len(files)
+  segments = []
+
+  # 1328100159_5_126.ts
+  started_segment = False
+  segment_start=None
+  segment_num_of_chunks=0
+  previous_chunk_number = -1
+  for f in files:
+      try:
+          timestamp,chunkduration,chunknumber = \
+              f.split(".ts")[0].split("_")
+          timestamp=long(timestamp)
+          chunknumber=int(chunknumber)
+          chunkduration=int(chunkduration)
+      except Exception:
+          continue
+
+      if not started_segment:
+
+          segment_start = timestamp
+          segment_chunk_duration = chunkduration
+          segment_num_of_chunks = 1
+
+          started_segment = True
+      else:
+          # Segment end has been reached
+          if chunknumber != previous_chunknumber + 1:
+              segment = {}
+              segment["start_timestamp"] = segment_start
+              segment["start_isoformat"] = \
+                datetime.utcfromtimestamp(segment["start_timestamp"]).isoformat()
+              segment["end_timestamp"] = timestamp
+              segment["end_isoformat"] = \
+                datetime.utcfromtimestamp(segment["end_timestamp"]).isoformat()
+              segment["chunk_duration"] = segment_chunk_duration
+              segment["num_of_chunks"] = segment_num_of_chunks
+              segments.append(segment)
+
+              # Resetting for new segment
+              segment_start = timestamp
+              segment_chunk_duration = chunkduration
+              segment_num_of_chunks = 1
+              started_segment = True
+
+          else:
+              segment_num_of_chunks = segment_num_of_chunks + 1
+
+      previous_chunknumber = chunknumber
+
+  # Closing the last segment
+  segment = {}
+  segment["start_timestamp"] = segment_start
+  segment["start_isoformat"] = \
+    datetime.utcfromtimestamp(segment["start_timestamp"]).isoformat()
+  segment["end_timestamp"] = segment_start + segment_chunk_duration * segment_num_of_chunks
+  segment["end_isoformat"] = \
+    datetime.utcfromtimestamp(segment["end_timestamp"]).isoformat()
+  segment["chunk_duration"] = segment_chunk_duration
+  segment["num_of_chunks"] = segment_num_of_chunks
+  segments.append(segment)
+
+
+  res["extra"] = extra
+  res["segments"] = segments
+  return res
+
+
+
+
+@route(PREFIX_PATH +  '/pvr/:channel_id/media.ts')
+def pvr_http_parameters(channel_id):
+  """
+  For example:
+    channel_id = divinity_udp_239.192.201.5_1234
+    or
+    channel_id = divinitybyhttp
+  """
+
+  # Securization of channel_id value.
+  channel_id = securing_string(channel_id)
+
+  if not os.path.exists(ops.workdir + "/ts/" + str(channel_id)):
+      return abort(404, "Channel id. not found")
+
+  # Suring access to files entries cached
+  timer = int(time.time()) - ops.maxchunkduration * 1
+
+  if request.GET.get('time'):
+     timer = request.GET.get('time')
+  else:
+      m = "Not time parameter received"
+      message("pvr_http_parameters", m, "debug",None, None)
+      # date example: 2011-10-14_5:29:43
+      if request.GET.get('date'):
+            date = request.GET.get('date')
+            try:
+                date_object = datetime.strptime(date, '%Y-%m-%d_%H:%M:%S')
+                timer = int(calendar.timegm(date_object.utctimetuple()))
+            except ValueError:
+                m = "Incorrect date format. Expected: %Y-%m-%d_%H:%M:%S"
+                message("pvr_http_parameters", m, "warning",None, None)
+
+      else:
+          m = "Not date parameter received"
+          message("pvr_http_parameters", m, "debug",None, None)
+
+  return  pvr_http(timer,channel_id)
+
+
+
+@route(PREFIX_PATH +  '/pvr/:channel_id/:date')
+def pvr_http_url(channel_id, date):
+  """
+  For example:
+    channel_id = divinity_udp_239.192.201.5_1234
+    or
+    channel_id = divinitybyhttp
+  """
+
+  # Securization of channel_id value.
+  channel_id = securing_string(channel_id)
+
+  if not os.path.exists(ops.workdir + "/ts/" + str(channel_id)):
+      return abort(404, "Channel id. not found")
+
+  timer = int(time.time()) - ops.maxchunkduration * 1
+  try:
+      date_object = datetime.strptime(date + "_UTC" , '%Y-%m-%d_%H:%M:%S_%Z')
+      timer = int(calendar.timegm(date_object.utctimetuple()))
+  except ValueError:
+      m = "Incorrect date format. Expected: %Y-%m-%d_%H:%M:%S"
+      message("pvr_http_url", m, "warning",None, None)
+
+      if not os.path.exists(ops.workdir + "/ts/" + str(channel_id)):
+          return abort(400, "Incorrect date format. Expected: %Y-%m-%d_%H:%M:%S")
+
+  return pvr_http(timer,channel_id)
+
+
+###############################################################################
+
+
+
+if __name__ == '__main__':
+    if ops.fcgi:
+        bottle.run(server=bottle.FlupFCGIServer, port=ops.port, host=ops.ip)
+    else:
+        # bottle.run(host=ops.ip, port=ops.port)
+        # bottle.run(server=bottle.CherryPyServer, port=ops.port, host=ops.ip, 200)
+        bottle.run(server=bottle.PasteServer, port=ops.port, host=ops.ip,
+                quiet=True,
+                use_threadpool=True, threadpool_workers=200)
+
+

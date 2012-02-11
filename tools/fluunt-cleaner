@@ -1,0 +1,61 @@
+#! /usr/bin/python
+
+from optparse import OptionParser
+import os
+import sys
+import time
+
+cmdline_parser = OptionParser()
+cmdline_parser.add_option("-n", "--numhours",  dest="numhours",
+        help="Number of hours behind (default: 1)", default=1, type="int")
+cmdline_parser.add_option("-w", "--workdir", dest="workdir", default=".",
+        help="Work directory (default: .)")
+cmdline_parser.add_option("-c", "--channelid", dest="channelid",
+        default="npvr",
+        help="Channel Id (default: npvr)")
+cmdline_parser.add_option("-q", "--quiet",
+        action="store_false", dest="verbose", default=True,
+        help="Don't print status messages to stdout")
+
+
+(ops, sys.argv) = cmdline_parser.parse_args()
+
+# if sys.argv.__len__() > 1:
+#     (ops, sys.argv) = cmdline_parser.parse_args()
+# else:
+#     cmdline_parser.print_help()
+
+VERBOSE=ops.verbose
+
+hours_to_substract = int(ops.numhours)
+
+epoch_now = time.time()
+epoch_limit = epoch_now - (hours_to_substract * 60 * 60)
+
+if VERBOSE:
+    print "epoch_now: " + str(epoch_now)
+    print "epoch_limit: " + str(epoch_limit)
+
+base_dir = ops.workdir + os.sep + "ts"
+
+f_stats = ""
+f = None
+
+d = ops.channelid
+
+for f in os.listdir(base_dir + os.sep + d):
+    try:
+      f_stats = os.stat(base_dir + os.sep + d + os.sep + f)
+      # f_creation_time is like 1291217407.0913715 (epoch)
+      f_creation_time = f_stats.st_ctime
+      if f_creation_time < epoch_limit:
+        os.remove(base_dir + os.sep + d + os.sep + f)
+        if VERBOSE:
+          print str(f_creation_time) + " (creation_time) < " \
+          + str(epoch_limit) + " (epoch_limit)"
+          print base_dir + os.sep + d + os.sep + f + " has been removed."
+
+    except Exception:
+      print "Problem removing: " + base_dir + os.sep + d + os.sep + f + "."
+      pass
+

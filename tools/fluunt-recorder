@@ -1,0 +1,596 @@
+#!/usr/bin/python
+# -*- coding:utf-8 -*-
+
+# Author: Pablo Saavedra Rodinho
+# Contact: pablo.saavedra@interoud.com
+
+"""
+Save a transport stream on disk as collection of chunks
+
+Chunks are create into a directory s follow:
+
+  - Channel_id:
+         <<key>>_<<protocol>>_<<ip>>_<<port>>
+      || <<key>> (for HTTP sources)
+
+  - Directory:  /ts/<<channel_id>>
+  - Chunk:
+      <<directory>>/<<timestamp>>_<<secuential_counter>>_<<chunk_duration>>.ts
+
+
+"""
+
+
+from optparse import OptionParser
+
+import os
+import sys
+import time
+from datetime import datetime
+import struct
+import socket
+import signal
+
+import urllib2
+
+
+LOG_FILE = "./recorder.log"
+LOG_FILE_FD = None
+LOG_SEVERITIES = \
+    ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"]
+VERBOSITY_LEVEL = LOG_SEVERITIES[6]
+
+# udpreader thread
+threads = []
+
+from threading import Thread
+
+
+def signal_hup_handler(signal, frame):
+    global LOG_FILE_FD
+    print 'Reloading recorder ... '
+    m = "Signal number %s detected. Reloading recorder" % str(signal)
+    message ("signal_hup_handler",  m, "INFO", None, None)
+
+    n = LOG_FILE_FD.name
+
+    try:
+      LOG_FILE_FD.close()
+      LOG_FILE_FD = open(ops.logfile, "a+b")
+    except Exception, e:
+      # print "Can not open %s file: %s" % (n, str(e))
+      sys.exit (-1)
+
+
+def exit_program():
+    global threads
+
+    if len (threads) > 0:
+        m =  "Stopping threads ..."
+        message("exit_program", m, "INFO", None, None)
+
+        for t in threads:
+            t.stopped = True
+            t.join()
+
+    sys.exit(0)
+
+def signal_int_handler(signal, frame):
+    m = "Keyboard interrupt: udpreader ending"
+    message("signal_int_handler", m, "INFO", None, None)
+    exit_program()
+
+signal.signal(signal.SIGINT, signal_int_handler)
+signal.signal(signal.SIGUSR1, signal_hup_handler)
+signal.signal(signal.SIGHUP, signal_hup_handler)
+
+
+def message(module, mess, severity=LOG_SEVERITIES[6], identifier=None, peer=None):
+  global VERBOSITY_LEVEL
+  global LOG_SEVERITIES
+
+  i_s = 6
+  try:
+      i_s = LOG_SEVERITIES.index(str(severity).lower())
+  except ValueError:
+      pass
+  i_l = LOG_SEVERITIES.index(VERBOSITY_LEVEL)
+
+  if i_s <= i_l:
+    res = "[%s]" % str(datetime.utcfromtimestamp(float(time.time())).isoformat())
+
+    if severity:
+      res = res + " [%s]" % str(severity).upper()
+    else:
+      res = res + " [-]"
+
+    res = res + " [%s]" % str(module)
+
+    if peer:
+      res = res + " [%s]" % str(peer)
+    else:
+      res = res + " [-]"
+
+    if identifier:
+      res = res + " [%s]" % str(identifier)
+    else:
+      res = res + " [-]"
+
+    res = res + " " + str(mess)
+
+    LOG_FILE_FD.write(res + "\n")
+    LOG_FILE_FD.flush()
+
+
+
+
+class udpreader(Thread):
+
+    def __init__ (self,group,port):
+      Thread.__init__(self)
+
+      self.stopped = False
+
+      self.destination = None
+      self.udp_timeout_reached = True
+      self.datas = []
+
+      # Look up multicast group address in name server and find out IP version
+      addrinfo = socket.getaddrinfo(group, None)[0]
+
+      # Create a socket
+      self.s = socket.socket(addrinfo[0], socket.SOCK_DGRAM)
+
+      # Allow multiple copies of this program on one machine
+      # (not strictly needed)
+      self.s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+      # Bind it to the ip:port
+      self.s.bind((group, port))
+
+      # Timeout
+      self.s.settimeout(ops.sockettimeout)
+
+      m = "Socket TIMEOUT: " + str(self.s.gettimeout())
+      message("udpreader", m, "INFO", None, None)
+
+      # print self.s.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+      self.s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 507904)
+      # print self.s.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+      m = "Socket SO_RCVBUF: " + str(self.s.getsockopt(socket.SOL_SOCKET,socket.SO_RCVBUF))
+      message("udpreader", m, "INFO", None, None)
+
+
+
+      group_bin = socket.inet_pton(addrinfo[0], addrinfo[4][0])
+      # Join group
+      if addrinfo[0] == socket.AF_INET: # IPv4
+          mreq = group_bin + struct.pack('=I', socket.INADDR_ANY)
+          self.s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+      else:
+          mreq = group_bin + struct.pack('@I', 0)
+          self.s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
+
+    def stop(self):
+        try:
+            self.destination.close()
+        except Exception:
+            pass
+        m = "Udpreader ended"
+        message("udpreader", m, "INFO", None, None)
+
+    def run(self):
+        while not self.stopped:
+          try:
+              data, sender = self.s.recvfrom(ops.socketbuffer)
+              # try:
+              #     self.destination.write(data)
+              # except:
+              #     pass
+              self.datas.append(data)
+
+              if self.udp_timeout_reached:
+                  m = "Source is on"
+                  message("udpreader", m, "INFO", None, None)
+                  self.udp_timeout_reached = False
+
+          except socket.timeout:
+              m = "Source is off"
+              message("udpreader", m, "INFO", None, None)
+              self.udp_timeout_reached = True
+
+          except Exception, e:
+              m = "Exception occurred: %s" % str(e)
+              message("udpreader", m, "ERROR", None, None)
+
+        self.stop()
+
+
+### Global vars
+
+UDP_SOURCE=False
+
+### End Global vars
+
+
+################################################################################
+
+parser = OptionParser()
+
+parser.add_option("-w", "--workdir", dest="workdir", default=".",
+        help="Work directory (default: .)", metavar="WORKDIR")
+
+parser.add_option("-U", "--uri", dest="uri",
+        help="Source URI/URL (default: http://localhost:8082)",
+        default="http://localhost:8082")
+
+parser.add_option("-K", "--key", dest="key",
+        help="Arbitrary key (default: npvr)", metavar="KEY",
+       default="npvr")
+
+parser.add_option("-i", "--ip", dest="ip",
+        help="Source host or IP (default: 127.0.0.1)", metavar="IP",
+       default="127.0.0.1")
+
+parser.add_option("-p", "--port", dest="port",
+       help="Source port (default: 1234)", metavar="PORT",
+       default=1234, type="int")
+
+parser.add_option("-P", "--protocol", dest="protocol",
+       help="Source protocol (default: udp) (ops: udp|http)", metavar="PROTOCOL",
+       default="udp")
+
+parser.add_option("-C", "--chunkduration", dest="chunkduration",
+       help="Chunk duration (default: 30)", metavar="CHUNKDURATION",
+       default=30, type="int")
+
+parser.add_option("-T", "--sockettimeout", dest="sockettimeout",
+       help="Socket timeout (default: 30)",
+       default=30, type="int")
+
+parser.add_option("-B", "--socketbuffer", dest="socketbuffer",
+       help="Socket buffer in bytes(default: 1500)",
+       default=1500, type="int")
+
+parser.add_option("-s", "--stop",
+        action="store_false", dest="keepon", default=True,
+        help="Program stop when source is off")
+
+parser.add_option("-v", "--verbose",
+        dest="verbose", default="INFO",
+        help="Verbosity level (default: %s) (ops: %s)"
+            % (str(VERBOSITY_LEVEL),str(LOG_SEVERITIES)))
+
+parser.add_option("-L", "--logfile",
+        dest="logfile", default=LOG_FILE,
+        help="Log file (default: %s)" % LOG_FILE)
+
+
+
+################################################################################
+
+(ops, args) = parser.parse_args()
+
+VERBOSE=ops.verbose
+
+if not ops.protocol == "http":
+    ops.protocol = "udp"
+
+if ops.protocol == "udp":
+    UDP_SOURCE = True
+
+try:
+    LOG_FILE_FD = open(ops.logfile, "a+b")
+except Exception, e:
+    m = "Can not open %s file: %s" % (ops.logfile, str(e))
+    message("main", m, "INFO", None, None)
+    sys.exit (-1)
+
+v = ops.verbose.lower()
+if LOG_SEVERITIES.__contains__(v):
+    VERBOSITY_LEVEL = v
+
+m = "Starting server"
+message("main", m, "INFO", None, None)
+
+m = "Verbosity level set to: %s" % VERBOSITY_LEVEL
+message("main", m, "INFO", None, None)
+
+################################################################################
+
+
+def main():
+    # Channel_id: <<key>>_<<protocol>>_<<ip>>_<<port>>
+    # Directory: /ts/<<channel_id>>
+    # File:  <<directory>>/<<timestamp>>_<<secuential_counter>>_<<chunk_duration>>.ts
+    # receiver("239.192.201.5",1234)
+
+    key = ops.key
+    # if UDP_SOURCE:
+    #     key = key + "_" + ops.protocol + "_" + ops.ip + "_" + str(ops.port)
+
+    prefix = ops.workdir + "/ts/"
+    try:
+      os.mkdir(prefix)
+    except OSError, e:
+        m = "Warning:" + str(e)
+        message("main", m, "INFO", None, None)
+    prefix = prefix + key + "/"
+    try:
+      os.mkdir(prefix)
+    except OSError, e:
+        m = "Warning:" + str(e)
+        message("main", m, "INFO", None, None)
+
+    if UDP_SOURCE:
+        udp_receiver(prefix,ops.ip,ops.port,ops.chunkduration)
+    else:
+        # Assuming URI
+        http_receiver(prefix,ops.uri,ops.chunkduration)
+
+
+
+def udp_receiver(destination_filename_pefix, group,port, chunkduration):
+    global threads
+
+    secuential_counter = 0
+    f = None
+
+    t = udpreader(group,port)
+    t.start()
+    threads.append(t)
+
+    loop_stop = False
+    delay = 0
+    delay_1 = 0
+    delay_3 = 0
+    old_f = None
+
+    while not loop_stop:
+      try:
+        current_time_0 = time.time()
+
+        if old_f:
+            try:
+                old_f.close()
+            except Exception:
+                m =  "Waiting to close old file descriptor"
+                message("udp_receiver", m, "WARN", None, None)
+                try:
+                  time.sleep(2)
+                  old_f.close()
+                except Exception, e:
+                  m = "Descriptor unclosed"
+                  message("udp_receiver", m, "ERROR", None, None)
+            old_f = None
+
+        if not t.udp_timeout_reached:
+            # m = "Delay " + str(delay) + " = " + str(delay_1) + " + " + str(delay_3)
+
+            if delay > chunkduration:
+                m = "Chunk duration exceeded by delay (" \
+                    + str(chunkduration) + " < " + str(delay) + ")"
+                message("udp_receiver", m, "WARN", None, None)
+
+            current_time = time.time()
+
+            # openning file
+            secuential_counter = secuential_counter + 1
+            filename = destination_filename_pefix \
+                     + str(int(current_time)) \
+                     + "_" + str(chunkduration) \
+                     + "_" + str(int(secuential_counter)) + ".ts"
+            f = open(filename
+                    ,"w+b")
+            old_f = t.destination
+            t.destination = f
+
+
+            m = "Datas to write on %s: %s" % (filename, str(len(t.datas)))
+            message("udp_receiver", m, "DEBUG", None, None)
+
+            while len(t.datas) > 100:
+                data = t.datas[0]
+                t.datas.__delitem__(0)
+                try:
+                  f.write(data)
+                  f.flush()
+                except Exception, e:
+                  m = "Excepcion occurred while writing data into chunk file: " \
+                    + str(e)
+                  message("udp_receiver", m, "ERROR", None, None)
+                  pass
+
+            m = "Datas wrote"
+            message("udp_receiver", m, "DEBUG", None, None)
+
+
+            current_time_3 = time.time()
+
+            delay = current_time_3 - current_time_0
+            m = "Delay: " + str(delay) + " = " + str(current_time_3) + " - " + str(current_time_0)
+            message("udp_receiver", m, "DEBUG", None, None)
+
+            if chunkduration - delay > 0:
+                time.sleep(float(chunkduration) - delay)
+
+
+        else:
+
+            old_f = t.destination
+
+            time.sleep(long(chunkduration))
+
+            if not ops.keepon:
+                if t.udp_timeout_reached:
+                    m = "Stopping due to source downtime detected"
+                    message("udp_receiver", m, "INFO", None, None)
+
+                    try:
+                      old_f.close()
+                    except:
+                      pass
+
+                    exit_program()
+
+            continue
+
+
+      except Exception, e:
+          m = "Exception occurred: " + str(e)
+          message("udp_receiver", m, "INFO", None, None)
+          exit_program()
+
+
+
+
+def http_receiver(destination_filename_pefix, uri, chunkduration):
+
+    m = "Socket timeout:" + str(ops.sockettimeout)
+    message("http_receiver", m, "INFO", None, None)
+
+    http_f = urllib2.urlopen(uri,data=None,timeout=ops.sockettimeout)
+
+    timer = time.time()
+    secuential_counter = 1
+    is_source_on = False
+    is_source_interrupted = False
+    f = None
+    retries = 0
+    max_retries = 2
+    while True:
+        try:
+            data =  http_f.read(ops.socketbuffer)
+
+            if ( data.rfind("Page not found") != -1 ):
+                raise Exception('End of stream', 'Page not found')
+            if data == "":
+                raise Exception('End of stream', 'No more data found')
+
+            # Data received
+            if not is_source_on:
+                m = "Source is on"
+                message("http_receiver", m, "INFO", None, None)
+
+                is_source_on = True
+
+                secuential_counter = 1
+                timer = time.time()
+                filename = destination_filename_pefix \
+                        + str(int(timer)) \
+                        + "_" + str(chunkduration) \
+                        + "_" + str(int(secuential_counter)) + ".ts"
+                f = open(filename,"w")
+
+                m = "Starting chunk: %s" % filename
+                message("http_receiver", m, "info", None, None)
+
+
+
+
+            if is_source_interrupted:
+                m = "Source has been interrupted"
+                message("http_receiver", m, "INFO", None, None)
+
+                is_source_interrupted = False
+
+                timer = time.time()
+                secuential_counter = secuential_counter + 1
+
+                filename = destination_filename_pefix \
+                        + str(int(timer)) \
+                        + "_" + str(chunkduration) \
+                        + "_" + str(int(secuential_counter)) + ".ts"
+                f = open(filename,"w")
+
+                m = "Interrupted chunk: %s" % filename
+                message("http_receiver", m, "info", None, None)
+
+
+
+
+            f.write(data)
+        except Exception, e:
+            retries = retries + 1
+
+            if retries > max_retries:
+              m = "Source is off: %s" % str(e)
+              message("http_receiver", m, "INFO", None, None)
+
+              is_source_on = False
+              retries=0
+            else:
+              m = "Source interrupted (retries: %s/%s): %s" \
+                % (str(retries),str(max_retries),str(e))
+              message("http_receiver", m, "WARN", None, None)
+
+              is_source_interrupted = True
+
+            try:
+              f.close()
+            except Exception, e:
+              pass
+
+            time.sleep(5)
+
+            if not ops.keepon:
+                return
+
+            http_f = urllib2.urlopen(uri,data=None,timeout=ops.sockettimeout)
+            continue
+
+        # Data found, therefore we re-init retries var
+        retries=0
+
+        current_time = time.time()
+
+        if current_time > timer + chunkduration:
+            try:
+              f.close()
+            except Exception, e:
+              m = "Problem detected closing chunk file: %s" % str(s)
+              message("http_receiver", m, "ERROR", None, None)
+
+              try:
+                m = "Retrying closing file ..."
+                message("http_receiver", m, "INFO", None, None)
+                f.close()
+              except Exception, e:
+                  m = "Problem detected closing chunk file: %s" % str(s)
+                  message("http_receiver", m, "ERROR", None, None)
+
+                  m = "Ending the program"
+                  message("http_receiver", m, "INFO", None, None)
+
+                  return
+
+            timer = current_time
+            secuential_counter = secuential_counter + 1
+
+            try:
+              filename = destination_filename_pefix \
+                        + str(int(timer)) \
+                        + "_" + str(chunkduration) \
+                        + "_" + str(int(secuential_counter)) + ".ts"
+              f = open(filename,"w")
+
+              m = "New chunk: %s" % filename
+              message("http_receiver", m, "debug", None, None)
+
+
+
+
+            except Exception, e:
+              m = "Problem detected opening new chunk file: %s" % str(s)
+              message("http_receiver", m, "ERROR", None, None)
+
+              m = "Ending the program"
+              message("http_receiver", m, "INFO", None, None)
+
+              return
+
+
+
+if __name__ == '__main__':
+    main()
+

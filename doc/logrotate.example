@@ -1,0 +1,34 @@
+/var/log/fluunt/server.log {
+  daily
+  missingok
+  rotate 52
+  compress
+  delaycompress
+  # notifempty
+  create 640 root adm
+  sharedscripts
+  postrotate
+    for i in `ps ax | grep fluunt-server | grep -v grep |  awk '{print $1}'`
+    do
+      kill -USR1 $i
+    done
+  endscript
+} 
+
+/var/log/fluunt/recorder*.log {
+  daily
+  missingok
+  rotate 52
+  compress
+  delaycompress
+  # notifempty
+  create 640 root adm
+  sharedscripts
+  postrotate
+    for i in `ps ax | grep fluunt-recorder |  grep -v grep | awk '{print $1}'`
+    do
+      kill -USR1 $i
+    done
+  endscript
+} 
+
