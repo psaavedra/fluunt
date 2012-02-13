@@ -24,25 +24,23 @@ setup(
     url = 'http://github.com/psaavedra/fluunt',
     packages = find_packages(),
     package_data={
-        'cms_pictures_polaroid': [
-            'templates/*/*.html',
-            'static/*/css/*.css',
-            'static/*/images/*',
-            'static/*/js/*.js',
-        ],
-        'cms_pictures_slider': [
-            'templates/*/*.html',
-            'static/*/css/*.css',
-            'static/*/images/*',
-            'static/*/js/*.js',
-        ],
     },
     zip_safe=False,
     install_requires=[
         "paste",
-        "",
     ],
-
+    scripts=[
+        "tools/fluunt-server",
+        "tools/fluunt-cleaner",
+        "tools/fluunt-recorder"
+    ],
+    data_files=[
+        ('share/doc/fluunt', [
+            'doc/fluunt-server.cfg',
+            'doc/fluunt-cleaner.cfg',
+            'doc/fluunt-recorder.cfg'
+                ])
+    ],
     download_url= 'https://github.com/psaavedra/fluunt/zipball/master',
     classifiers=[
         "Development Status :: 2 - Pre-Alpha",
