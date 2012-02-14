@@ -89,7 +89,10 @@ def message(module, mess, severity=LOG_SEVERITIES[6], identifier=None, peer=None
       res = res + " [%s]" % str(peer)
     else:
       try:
-        res = res + " [%s]" % str(request.environ["REMOTE_ADDR"])
+        if request.header.get('X-Real-IP'):
+          res = res + " [%s]" % str( request.header.get('X-Real-IP') )
+        else:
+          res = res + " [%s]" % str(request.environ["REMOTE_ADDR"])
       except:
         res = res + " [-]"
 
