@@ -154,11 +154,11 @@ class udpreader(Thread):
       m = "Socket TIMEOUT: " + str(self.s.gettimeout())
       message("udpreader", m, "INFO", None, None)
 
-      # print self.s.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
-      self.s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 507904)
-      # print self.s.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
-      m = "Socket SO_RCVBUF: " + str(self.s.getsockopt(socket.SOL_SOCKET,socket.SO_RCVBUF))
-      message("udpreader", m, "INFO", None, None)
+      # # print self.s.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+      # self.s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 507904)
+      # # print self.s.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+      # m = "Socket SO_RCVBUF: " + str(self.s.getsockopt(socket.SOL_SOCKET,socket.SO_RCVBUF))
+      # message("udpreader", m, "INFO", None, None)
 
 
 
