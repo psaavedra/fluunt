@@ -129,6 +129,9 @@ class udpreader(Thread):
     def __init__ (self,group,port):
       Thread.__init__(self)
 
+      self.group = group
+      self.port = port
+
       self.stopped = False
 
       self.destination = None
@@ -199,6 +202,37 @@ class udpreader(Thread):
               message("udpreader", m, "INFO", None, None)
               self.udp_timeout_reached = True
 
+              # Look up multicast group address in name server and find out IP version
+              addrinfo = socket.getaddrinfo(self.group, None)[0]
+
+              # Create a socket
+              self.s = socket.socket(addrinfo[0], socket.SOCK_DGRAM)
+
+              # Allow multiple copies of this program on one machine
+              # (not strictly needed)
+              self.s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+              # Bind it to the ip:port
+              self.s.bind((self.group, self.port))
+
+              # Timeout
+              self.s.settimeout(ops.sockettimeout)
+
+              m = "Socket TIMEOUT: " + str(self.s.gettimeout())
+              message("udpreader", m, "INFO", None, None)
+             
+              group_bin = socket.inet_pton(addrinfo[0], addrinfo[4][0])
+              # Join group
+              if addrinfo[0] == socket.AF_INET: # IPv4
+                mreq = group_bin + struct.pack('=I', socket.INADDR_ANY)
+                self.s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+              else:
+                mreq = group_bin + struct.pack('@I', 0)
+                self.s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
+
+              m = "Socket reseted"
+              message("udpreader", m, "INFO", None, None)
+ 
           except Exception, e:
               m = "Exception occurred: %s" % str(e)
               message("udpreader", m, "ERROR", None, None)
