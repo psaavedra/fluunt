@@ -769,6 +769,7 @@ def pvr_segments(channel_id):
   segment_start=None
   segment_num_of_chunks=0
   previous_chunk_number = -1
+  previous_timestamp = None
   for f in files:
       try:
           timestamp,chunkduration,chunknumber = \
@@ -793,7 +794,8 @@ def pvr_segments(channel_id):
               segment["start_timestamp"] = segment_start
               segment["start_isoformat"] = \
                 datetime.utcfromtimestamp(segment["start_timestamp"]).isoformat()
-              segment["end_timestamp"] = timestamp
+              segment["end_timestamp"] = previous_timestamp \
+                + segment_chunk_duration
               segment["end_isoformat"] = \
                 datetime.utcfromtimestamp(segment["end_timestamp"]).isoformat()
               segment["chunk_duration"] = segment_chunk_duration
@@ -810,13 +812,14 @@ def pvr_segments(channel_id):
               segment_num_of_chunks = segment_num_of_chunks + 1
 
       previous_chunknumber = chunknumber
+      previous_timestamp = timestamp
 
   # Closing the last segment
   segment = {}
   segment["start_timestamp"] = segment_start
   segment["start_isoformat"] = \
     datetime.utcfromtimestamp(segment["start_timestamp"]).isoformat()
-  segment["end_timestamp"] = segment_start + segment_chunk_duration * segment_num_of_chunks
+  segment["end_timestamp"] = timestamp + segment_chunk_duration
   segment["end_isoformat"] = \
     datetime.utcfromtimestamp(segment["end_timestamp"]).isoformat()
   segment["chunk_duration"] = segment_chunk_duration
