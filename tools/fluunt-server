@@ -752,10 +752,17 @@ def pvr_segments(channel_id):
 
   files = get_listdir(ops.workdir + "/ts/" + str(channel_id))
 
+
   res = {}
   extra = {}
   extra["num_of_chunks"]= len(files)
   segments = []
+
+  if len(files) == 0:
+    res["extra"] = extra
+    res["segments"] = segments
+    return res
+
 
   # 1328100159_5_126.ts
   started_segment = False
@@ -895,7 +902,6 @@ def pvr_http_url(channel_id, date):
 
 
 ###############################################################################
-
 
 
 if __name__ == '__main__':
