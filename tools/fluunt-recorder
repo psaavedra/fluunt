@@ -423,7 +423,7 @@ def udp_receiver(destination_filename_pefix, group,port, chunkduration):
             m = "Datas to write on %s: %s" % (filename, str(len(t.datas)))
             message("udp_receiver", m, "DEBUG", None, None)
 
-            while len(t.datas) > 100:
+            while len(t.datas) > 200:
                 data = t.datas[0]
                 t.datas.__delitem__(0)
                 try:
