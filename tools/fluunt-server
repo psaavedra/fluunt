@@ -1,7 +1,35 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
+
+'''
+
+MP4 media headers
+-----------------
+
+ * https://github.com/psaavedra/qtfaststart/tree/master/qtfaststart
+ * http://wiki.multimedia.cx/index.php?title=QuickTime_container#Byte_Ordering
+
+FLV media headers
+-----------------
+
+[flv header]
+F L V 01 05 00 00 00 09      FLV_HEADER (9 bytes)
+00 00 62 F1                  PREVIOUS_TAG_SIZE (4 bytes)
+[end flv header]
+
+[tag header]
+08                           TAG_TYPE (08, 09, 12)
+00 03 44                     DATA_SIZE
+00 72 63                     TIMESTAMP (milliseconds)
+00                           EXT TIMESTAMP
+00 00 00                     STREAM_ID (ALLWAYS 0)
+[end tag header]
+
+'''
+
 import os
 import sys
+import subprocess
 
 import bottle
 from bottle import route, run, view
@@ -17,6 +45,8 @@ import calendar
 import signal
 import subprocess
 
+DEV_NULL=open('/dev/null', "w")
+
 LOG_FILE = "./server.log"
 LOG_FILE_FD = None
 LOG_SEVERITIES = \
@@ -31,6 +61,12 @@ SUBPROCESS_TIMES={}
 
 cache_listdir_value = {}
 cache_listdir_timer={}
+
+def dump_hex(data):
+    res = ""
+    for i in data:
+        res = res + i.encode("hex") + " "
+    return res
 
 
 def signal_term_handler(signal, frame):
@@ -67,13 +103,13 @@ signal.signal(signal.SIGHUP, signal_hup_handler)
 def message(module, mess, severity=LOG_SEVERITIES[6], identifier=None, peer=None):
   global VERBOSITY_LEVEL
   global LOG_SEVERITIES
-
+  
   i_s = 6
   try:
-      i_s = LOG_SEVERITIES.index(severity)
+      i_s = LOG_SEVERITIES.index(severity.lower())
   except ValueError:
       pass
-  i_l = LOG_SEVERITIES.index(VERBOSITY_LEVEL)
+  i_l = LOG_SEVERITIES.index(VERBOSITY_LEVEL.lower())
 
   if i_s <= i_l:
     res = "[%s]" % str(datetime.utcfromtimestamp(float(time.time())).isoformat())
@@ -105,6 +141,217 @@ def message(module, mess, severity=LOG_SEVERITIES[6], identifier=None, peer=None
 
     LOG_FILE_FD.write(res + "\n")
     LOG_FILE_FD.flush()
+
+
+
+
+
+def get_flv_stream(path, offset=0, _id=None, tmp_dir="./tmp/flunnt/flv/offsets/"):
+  m = "Init (%s, %s, %s) " % (path, offset, tmp_dir)
+  message("get_flv_stream", m, "info", _id, None)
+  try:
+    f = open( path , 'r')
+    
+    seeking_entry_point = True
+    
+    header = '''FLV\x01\x05\x00\x00\x00\x09'''
+    yield header
+    
+    hits = 0
+    counter_loops = 0
+    
+    while True:
+      counter_loops = counter_loops + 1
+
+      if seeking_entry_point:
+
+          if counter_loops % 50000 == 1:
+              m = "Seeaking entry point for FLV media type"
+              message("get_flv_stream", m, "DEBUG",_id, None)
+          data = f.read(92) # 23 * 4
+                  
+          data_find = data.find("\x00\x00\x00\x00")
+          if data_find > 11 and data[data_find-7] in ["\x08","\x09", ]: # ["\x08","\x09","\x12", ]:
+              r = data[data_find-11:]
+              
+              timestamp = int(  r[8:11].encode('hex'), 16  )  / 1000.0
+              
+              if timestamp > offset:
+                  hits = hits + 1
+              else:
+                  hits = 0
+              if hits >= 3:
+                  message("get_flv_stream", dump_hex(data), "DEBUG",_id, None)
+                  message("get_flv_stream", dump_hex(r), "DEBUG",_id, None)
+                  message("get_flv_stream", "timestamp: " + repr(timestamp), "DEBUG",_id, None)
+                  yield r
+                  seeking_entry_point = False
+                  message("get_flv_stream", "Offset reached", "DEBUG",_id, None)
+      else:
+              data = f.read()
+              yield data
+      
+      if len(data) == 0:
+          m = "Reached end of file"
+          message("get_flv_stream", m, "DEBUG",_id, None)
+          break
+    
+    f.close()
+  except Exception,e:
+    m = "Exception: %s " % repr(e)
+    message("get_flv_stream", m, "info", _id, None)
+    f.close()
+
+
+
+
+
+
+
+
+
+def get_mp4_stream(path, offset=0, _id=None, tmp_dir="./tmp/flunnt/mp4/offsets/"):
+    '''
+    offset: time in seconds (long)
+    '''
+    m = "Init (%s, %s, %s) " % (path, offset, tmp_dir)
+    message("get_mp4_stream", m, "info", _id, None)
+    
+    offset_file = tmp_dir + os.sep + path + "_" + str(offset)
+    
+    m = "offset_file: %s" % offset_file
+    message("get_mp4_stream", m, "info", _id, None)
+    
+    dir_ = os.path.dirname(offset_file)
+    d_ = ""
+    for d in dir_.split(os.sep):
+        d_ = d_ + d + os.sep
+        try:
+          if d != "":
+              os.mkdir(d_)
+        except Exception, e:
+          pass
+    
+
+    try:
+        if not os.path.exists(offset_file + "_qtf"):
+            cmd = '''/usr/bin/ffmpeg -y -ss %s -i %s -vcodec copy -acodec copy -f mp4  %s '''\
+                % (str(offset), path, offset_file )
+            m = "Command: " + cmd
+            message("get_mp4_stream", m, "info", _id, None)
+            ffmpeg = subprocess.Popen(cmd.split(), shell=False, bufsize=1024,
+                 stdin=subprocess.PIPE, stderr=DEV_NULL,
+                 stdout=DEV_NULL, close_fds=True)
+            ffmpeg.wait()
+
+            cmd = '''/usr/local/bin/qtfaststart  %s %s'''\
+                % (offset_file, offset_file + "_qtf")
+            m = "Command: " + cmd
+            message("get_mp4_stream", m, "info", _id, None)
+            cmd_split = cmd.split()
+            message("get_mp4_stream", str(cmd_split), "info", _id, None)
+
+            attempt = 0
+            while True:
+              try:
+                stdout_ = DEV_NULL
+                stderr_ = DEV_NULL
+                message("get_mp4_stream", "Executing qtfaststart", "debug", _id, None)
+                qtf = subprocess.Popen(cmd_split, shell=False, bufsize=1024,
+                   stdin=subprocess.PIPE, stderr=stderr_,
+                   stdout=stdout_, close_fds=True)
+
+                qtf.wait()
+                break
+              except Exception, e:
+                attempt = attempt +1
+                message(\
+                  "get_mp4_stream", "Error executing qtfaststart (attempt %s/3)" % attempt, "error", _id, None)
+                if attempt > 3:
+                    raise e
+                time.sleep(3)
+            message("get_mp4_stream", "sdsdasda", "info", _id, None)
+
+            try:
+                m = "Removing %s temporary file" % (offset_file)
+                message("get_mp4_stream", m, "info", _id, None)
+                os.remove(offset_file)
+            except Exception, e:
+                m = "Unexpected error removing %s file" % (offset_file
+                          , repr(e))
+                message("get_mp4_stream", m, "info", _id, None)
+
+        else: # File was been generated by other concurrent process.
+            m = "_qtf temporary file already exists"
+            message("get_mp4_stream", m, "debug", _id, None)
+
+        for i in range(3):
+            try:
+                m = "Opening file ..."
+                message("get_mp4_stream", m, "info", _id, None)
+                time.sleep(2)
+                f = open(offset_file + "_qtf")
+                m = "File opened"
+                message("get_mp4_stream", m, "info", _id, None)
+
+                try:
+                  m = "Removing %s temporary file" % (offset_file + "_qtf")
+                  message("get_mp4_stream", m, "info", _id, None)
+                  os.remove(offset_file + "_qtf")
+                except Exception, e:
+                  m = "Unexpected error removing %s file" % (offset_file
+                          + "_qtf", repr(e))
+                  message("get_mp4_stream", m, "info", _id, None)
+                  pass
+                break
+            except Exception, e:
+                m = "File not opened: %e" % str(e)
+                message("get_mp4_stream", m, "error", _id, None)
+                pass
+
+        m = "Ready to streaming"
+        message("get_mp4_stream", m, "info", _id, None)
+    
+        for i in f:
+            yield i
+    except Exception, e:
+        m = "Unexpected error: %s" % str(e)
+        message("get_mp4_stream", m, "error", _id, None)
+        try:
+            m = "Forcing removing %s temporary file" % (offset_file)
+            message("get_mp4_stream", m, "debug", _id, None)
+            os.remove(offset_file)
+        except Exception, e:
+            pass
+        try:
+            m = "Forcing removing %s temporary file" % (offset_file + "_qtf")
+            message("get_mp4_stream", m, "debug", _id, None)
+            os.remove(offset_file + "_qtf")
+        except Exception, e:
+            pass
+        yield ""
+
+def get_media_info(path):
+    res = {}
+
+    cmd = '''ffmpeg -i %s''' % path
+
+    ffmpeg = subprocess.Popen(cmd.split(), shell=False, bufsize=1024,
+         stdin=subprocess.PIPE, stdout=DEV_NULL,
+         stderr=subprocess.PIPE, close_fds=True)
+
+    for i in ffmpeg.stderr:
+        if i.count("bitrate:") != 0 and \
+           i.count("start:") != 0 :
+            # Duration: 00:03:21.8, start: 0.000000, bitrate: 1147 kb/s
+            res["duration"] = i.split("Duration: ")[1].split(",")[0]
+            res["bitrate"] = \
+              long(i.split("bitrate: ")[1].split("kb")[0].strip()) * 1024
+        if i.count("Input #0") != 0:
+            pass
+
+    ffmpeg.wait()
+    return res
 
 
 def get_listdir(dirname):
@@ -195,7 +442,7 @@ def pvr_hls(timer,chunkoffset,channel_id):
   m =  "Chunk offset set to: " + str(chunkoffset)
   message("pvr_hls", m, "INFO", None, None)
 
-  files = get_listdir(ops.workdir + "/ts/" + str(channel_id))
+  files = get_listdir(ops.workdir + "/pvr/ts/" + str(channel_id))
   position  = get_next_higher_filename_position(files, str(timer))
 
   m = ""
@@ -214,7 +461,7 @@ def pvr_hls(timer,chunkoffset,channel_id):
       message("pvr_hls", m, "warning", None, None)
       time.sleep(int(ops.maxchunkduration))
 
-      files = get_listdir(ops.workdir + "/ts/" + str(channel_id))
+      files = get_listdir(ops.workdir + "/pvr/ts/" + str(channel_id))
       position  = get_next_higher_filename_position(files, str(timer))
 
       if position >= len(files):
@@ -398,7 +645,7 @@ def pvr_http(timer,channel_id,stream_limited=True):
             " (" + datetime.utcfromtimestamp(float(timer)).isoformat() + ")"
   message("pvr_http", m, "INFO",_id, None)
 
-  files = get_listdir(ops.workdir + "/ts/" + str(channel_id))
+  files = get_listdir(ops.workdir + "/pvr/ts/" + str(channel_id))
   position  = get_next_higher_filename_position(files, str(timer))
 
   m = ""
@@ -418,7 +665,7 @@ def pvr_http(timer,channel_id,stream_limited=True):
       message("pvr_http", m, "warning",_id, None)
       time.sleep(int(ops.maxchunkduration))
 
-      files = get_listdir(ops.workdir + "/ts/" + str(channel_id))
+      files = get_listdir(ops.workdir + "/pvr/ts/" + str(channel_id))
       position  = get_next_higher_filename_position(files, str(timer))
 
       if position >= len(files):
@@ -449,7 +696,7 @@ def pvr_http(timer,channel_id,stream_limited=True):
 
           timestamp = int(timestamp) + 1
 
-          files = get_listdir(ops.workdir + "/ts/" + str(channel_id))
+          files = get_listdir(ops.workdir + "/pvr/ts/" + str(channel_id))
           # XXX: Avoiding repetition of the previous chunk
           # print timestamp
           position  = get_next_higher_filename_position(files, str(timestamp))
@@ -467,7 +714,7 @@ def pvr_http(timer,channel_id,stream_limited=True):
                 time.sleep(int(duration))
                 waitings = waitings + 1
 
-                files = get_listdir(ops.workdir + "/ts/" + str(channel_id))
+                files = get_listdir(ops.workdir + "/pvr/ts/" + str(channel_id))
                 position  = get_next_higher_filename_position(files, str(timestamp))
                 if position >= len(files):
                    m = "Breaking stream: position >= len(files)"
@@ -502,7 +749,7 @@ def pvr_http(timer,channel_id,stream_limited=True):
       speed = 1500
       try:
           if stream_limited:
-            path = ops.workdir + "/ts/" + str(channel_id) + '/' \
+            path = ops.workdir + "/pvr/ts/" + str(channel_id) + '/' \
                  + files[position]
             size = os.path.getsize(path)
             speed = size / (long(duration) - delay)
@@ -517,7 +764,7 @@ def pvr_http(timer,channel_id,stream_limited=True):
               time.sleep(int(duration))
               waitings = waitings + 1
 
-              path = ops.workdir + "/ts/" + str(channel_id) + '/' \
+              path = ops.workdir + "/pvr/ts/" + str(channel_id) + '/' \
                  + files[position]
               size = os.path.getsize(path)
               speed = size /  int(duration)
@@ -566,6 +813,113 @@ def pvr_http(timer,channel_id,stream_limited=True):
       m = "Delay: " + str(delay_10) + " + " \
           + str(delay_20) + " + " + str(delay_30) + " = " + str(delay)
       message("pvr_http", m, "debug",_id, None)
+
+
+
+
+
+
+def vod_http(media_id, offset=0, session_id=None,stream_limited=True):
+ '''
+  offset=seconds (float)
+  media_id=identifier of media filename
+  session_id=session identifier
+  stream_limited = boolean
+ '''
+ try:
+  try:
+      _id = float(session_id)
+  except Exception:
+      _id=time.time()
+
+  try:
+      offset = float(offset)
+  except Exception:
+      offset=0
+
+  m =  "VoD media Id: " + str(media_id)
+  message("vod_http", m, "INFO", _id, None)
+  m = "Offset set to: " + str(offset)
+  message("vod_http", m, "INFO",_id, None)
+
+  path = ops.workdir + "/videos/" + str(media_id)
+    
+  # TODO: Analizar el formato
+  # response.content_type = 'video/mpeg2'
+  # response.content_type = 'video/x-flv''
+  # speed = get_media_info(path)["bitrate"] / 8
+  # speed = size / (long(duration))
+  speed = 2000000
+  m = "Speed: " + str(speed) + " Byte/s"
+  message("vod_http", m, "debug",_id, None)
+  
+  # Controlar el offset
+  # bytes_offset = offset * speed
+  # m = "Bytes offset set to: %s" \
+  #     % (str(bytes_offset))
+  # message("vod_http", m, "INFO",_id, None)
+
+  # XXX: speed overhead in order to avoid stalled state dring the streaming
+  # speed = speed + 5000000
+  
+  # Recuperar el fichero
+  
+  
+  try:
+      f = open( path , 'r')
+      response.content_type = 'video/mp4'
+      media_type = None
+      if f.read(3) == "FLV":
+        media_type = "FLV"
+        response.content_type = 'video/x-flv'
+      f.seek(0)
+      if f.read(96).find("mp4") != -1:
+        media_type = "MP4"
+        response.content_type = 'video/mp4'
+      
+      if offset != 0:
+          if media_type == "FLV":
+              for ii in get_flv_stream(path, offset, _id, "/tmp/flunnt/flv/offsets/"):
+                  yield ii
+          if media_type == "MP4":
+              for ii in get_mp4_stream(path, offset, _id, "/tmp/flunnt/mp4/offsets/"):
+                  yield ii
+      else:
+          f.seek(0)
+          data = f.read(16)
+          yield data
+          m = "Header: " + dump_hex(data)
+          message("vod_http", m, "DEBUG",_id, None)
+      
+          while True:
+              data = f.read(int(speed / 16.0))
+              yield data
+              time.sleep(1.0 / 16)
+              
+              if len(data) == 0:
+                  m = "Reached end of file"
+                  message("vod_http", m, "DEBUG",_id, None)
+                  break
+      f.close()
+      
+  except Exception, e:
+      message("vod_http", "Oops: " + repr(e), "debug","1", None)
+      yield abort(404, "No file found")
+      streaming = False
+  
+  counter_loops = 0
+
+  
+ except Exception, e:
+     m = "Unexpected error: " + repr(e)
+     message("vod_http", m, "error", "1", None)
+     yield abort(500, m)
+
+
+
+
+
+
 
 
 
@@ -676,7 +1030,7 @@ def pvr_channels():
   """
   """
 
-  files = get_listdir(ops.workdir + "/ts/" )
+  files = get_listdir(ops.workdir + "/pvr/ts/" )
 
   res = {}
   res["channels"] = files
@@ -698,7 +1052,7 @@ def pvr_hls_parameters(channel_id):
   # Securization of channel_id value.
   channel_id = securing_string(channel_id)
 
-  if not os.path.exists(ops.workdir + "/ts/" + str(channel_id)):
+  if not os.path.exists(ops.workdir + "/pvr/ts/" + str(channel_id)):
       return abort(404, "Channel id. not found")
 
   # Suring access to files entries cached
@@ -747,10 +1101,10 @@ def pvr_segments(channel_id):
   # Securization of channel_id value.
   channel_id = securing_string(channel_id)
 
-  if not os.path.exists(ops.workdir + "/ts/" + str(channel_id)):
+  if not os.path.exists(ops.workdir + "/pvr/ts/" + str(channel_id)):
       return abort(404, "Channel id. not found")
 
-  files = get_listdir(ops.workdir + "/ts/" + str(channel_id))
+  files = get_listdir(ops.workdir + "/pvr/ts/" + str(channel_id))
 
 
   res = {}
@@ -841,12 +1195,17 @@ def pvr_http_parameters(channel_id):
     channel_id = divinity_udp_239.192.201.5_1234
     or
     channel_id = divinitybyhttp
+    
+    parameters:
+    
+       time=timestamp
+       date=%Y-%m-%d_%H:%M:%S
   """
 
   # Securization of channel_id value.
   channel_id = securing_string(channel_id)
 
-  if not os.path.exists(ops.workdir + "/ts/" + str(channel_id)):
+  if not os.path.exists(ops.workdir + "/pvr/ts/" + str(channel_id)):
       return abort(404, "Channel id. not found")
 
   # Suring access to files entries cached
@@ -887,7 +1246,7 @@ def pvr_http_url(channel_id, date):
   # Securization of channel_id value.
   channel_id = securing_string(channel_id)
 
-  if not os.path.exists(ops.workdir + "/ts/" + str(channel_id)):
+  if not os.path.exists(ops.workdir + "/pvr/ts/" + str(channel_id)):
       return abort(404, "Channel id. not found")
 
   timer = int(time.time()) - ops.maxchunkduration * 1
@@ -898,10 +1257,50 @@ def pvr_http_url(channel_id, date):
       m = "Incorrect date format. Expected: %Y-%m-%d_%H:%M:%S"
       message("pvr_http_url", m, "warning",None, None)
 
-      if not os.path.exists(ops.workdir + "/ts/" + str(channel_id)):
+      if not os.path.exists(ops.workdir + "/pvr/ts/" + str(channel_id)):
           return abort(400, "Incorrect date format. Expected: %Y-%m-%d_%H:%M:%S")
 
   return pvr_http(timer,channel_id)
+
+
+
+
+
+
+
+@route(PREFIX_PATH +  '/play')
+def vod_http_parameters():
+  """
+  Parameters:
+    
+      mo=rp_domingos_riazor_03-01-2013.flv
+      session=1357288024956.892   # session identifier 
+      usage=normal
+      tstart=249000  # offset in milliseconds
+    
+  """
+
+  session_id = None
+  if request.GET.get('session'):
+     session_id = request.GET.get('session')
+
+  mo = ""
+  if request.GET.get('mo'):
+     mo = request.GET.get('mo')
+     mo = securing_string(mo)
+
+  if not os.path.exists(ops.workdir + "/videos/" + str(mo)):     
+      m = "mo not found: %s" % ops.workdir + "/videos/" + str(mo)
+      message("vod_http_parameters", m, "warning",None, None)
+      return abort(404, "mo. not found")
+
+  try:
+     offset = float(long(request.GET.get('tstart')) / 1000.0)
+  except Exception:
+     offset = 0.0
+
+  return  vod_http(mo, offset, session_id)
+
 
 
 ###############################################################################
