@@ -35,6 +35,7 @@ import bottle
 from bottle import route, run, view
 # from bottle import hook
 from bottle import abort, request, response
+from bottle import HTTPResponse
 
 from optparse import OptionParser
 
@@ -61,6 +62,15 @@ SUBPROCESS_TIMES={}
 
 cache_listdir_value = {}
 cache_listdir_timer={}
+
+
+def print_headers(r):
+    res = "["
+    for k,v in r.headers.iteritems():
+      res = res + str(k) + ":" + str(v) + ", "
+    res = res + "]"
+    return res
+
 
 def dump_hex(data):
     res = ""
@@ -171,7 +181,30 @@ def get_flv_stream(path, offset=0, _id=None, tmp_dir="./tmp/flunnt/flv/offsets/"
           data = f.read(92) # 23 * 4
                   
           data_find = data.find("\x00\x00\x00\x00")
-          if data_find > 11 and data[data_find-7] in ["\x08","\x09", ]: # ["\x08","\x09","\x12", ]:
+          if data_find > 11 and (len(data) > data_find + 4 ) and data[data_find-7] in ["\x08","\x09", ]: # ["\x08","\x09","\x12", ]:
+
+              bitflags = data[data_find+4]
+
+              # message("get_flv_stream", bitflags.encode("hex"), "DEBUG",_id, None)
+              # if bitflags.encode("hex") != "17":
+              # Querido yo del manhana  ... esto viene d que quiero entrar
+              # en un keyframe.
+              #
+              # Doc: http://osflash.org/flv.
+              #
+              #
+              #  bitflags es el primer byte del body del paquete FLV que
+              #  viene a ser el siguiente byte despues de la cadena de
+              #  cuatro CEROS.
+              #
+              # En este byte viene el tipo de frame y el tipo de codec el
+              # cual es irrelevante en este caso.
+              #
+              # Un keyframe, que es lo que nos interesa, es 0001XXXX,
+              # y sin mas , por eso la comparacion binaria de aqui abajo:
+              if ( ( bytearray(bitflags)[0] & 0b11110000 ) >> 4 ) != 1:
+                 continue
+              # Un saludo. Nos vemos en el futuro.
               r = data[data_find-11:]
               
               timestamp = int(  r[8:11].encode('hex'), 16  )  / 1000.0
@@ -817,6 +850,111 @@ def pvr_http(timer,channel_id,stream_limited=True):
 
 
 
+def vod_http_partial_content(media_id, offset_min=0, offset_max=None, session_id=None,stream_limited=True):
+  '''
+  offset_min = bytes
+  offset_max = bytes
+  media_id=identifier of media filename
+  session_id=session identifier
+  stream_limited = boolean
+  '''
+  try:
+    try:
+      _id = float(session_id)
+    except Exception:
+      _id=time.time()
+
+    try:
+      offset = int(offset)
+    except Exception:
+      offset=0
+
+    m =  "VoD media Id: " + str(media_id)
+    message("vod_http_partial_content", m, "INFO",_id, None)
+    m = "Min Offset set to: " + str(offset_min)
+    message("vod_http_partial_content", m, "INFO",_id, None)
+    m = "Max Offset set to: " + str(offset_max)
+    message("vod_http_partial_content", m, "INFO",_id, None)
+
+    path = ops.workdir + "/videos/" + str(media_id)
+
+    # Recuperar el fichero
+    try:
+      length = os.path.getsize(ops.workdir + "/videos/" + str(media_id))
+
+      if length <= offset_min:
+          # TODO: debe de dar un 400 no se que
+          pass
+      if length <= offset_max: # length must be bigger than offset_max
+          # TODO: debe de dar un 400 no se que
+          pass
+
+      if offset_max and offset_min > offset_max:
+          # TODO: debe de dar un 400 no se que
+          pass
+
+      f = open( path , 'r')
+      response.content_type = 'video/mp4'
+      f.seek(offset_min)
+
+      response.status = 206
+      # args = response.headers.dict.copy()
+      # args[""]=res_body
+      # res = HTTPResponse(body=res_body, status=200, **response.headers.dict)
+
+      response.set_header('Accept-Ranges', 'bytes')
+      response.set_header('Content-Length', length)
+      response.set_header('Content-Type', "video/mp4")
+      if not offset_max:
+          response.set_header('Content-Length', length - offset_min)
+          response.set_header('Content-Range', \
+                  "bytes " + str(offset_min) + "-" + str(length - 1) + "/" + str(length))
+      else:
+          response.set_header('Content-Length', offset_max - offset_min + 1)
+          response.set_header('Content-Range', \
+                  "bytes " + str(offset_min) + "-" + str(offset_max) + "/" + str(length))
+
+
+      if not offset_max:
+          while True:
+              # message("vod_http_partial_content", "... ... \n", "DEBUG",_id, None)
+              data = f.read(4096)
+              yield data
+              # message("vod_http_partial_content", "... ... 2 \n", "DEBUG",_id, None)
+              if len(data) == 0:
+                  m = "Reached end of file"
+                  message("vod_http_partial_content", m, "DEBUG",_id, None)
+                  break
+      else:
+          bytes_to_read = 4096
+          total_bytes_to_read = offset_max - offset_min + 1  # total bytes to read
+          while True:
+              if total_bytes_to_read < bytes_to_read:
+                  bytes_to_read = total_bytes_to_read
+              data = f.read(bytes_to_read)
+              yield data
+              total_bytes_to_read = total_bytes_to_read - bytes_to_read
+              if len(data) == 0:
+                  m = "Reached end of the partial content"
+                  message("vod_http_partial_content", m, "DEBUG",_id, None)
+                  break
+
+      message("vod_http_partial_content", "End \n", "DEBUG",_id, None)
+      f.close()
+
+    except Exception, e:
+      message("vod_http_partial_content", "Internal error: %s" % repr(e),
+              "error","1", None)
+      yield abort(500, "Internal error: %s" % repr(e))
+
+  except Exception, e:
+     m = "Unexpected error: " + repr(e)
+     message("vod_http_partial_content", m, "error", "1", None)
+     yield abort(500, m)
+
+
+
+
 
 
 def vod_http(media_id, offset=0, session_id=None,stream_limited=True):
@@ -1264,42 +1402,88 @@ def pvr_http_url(channel_id, date):
 
 
 
-
-
-
-
 @route(PREFIX_PATH +  '/play')
 def vod_http_parameters():
   """
   Parameters:
-    
       mo=rp_domingos_riazor_03-01-2013.flv
-      session=1357288024956.892   # session identifier 
+      session=1357288024956.892   # session identifier
       usage=normal
       tstart=249000  # offset in milliseconds
-    
+
   """
-
-  session_id = None
-  if request.GET.get('session'):
-     session_id = request.GET.get('session')
-
-  mo = ""
-  if request.GET.get('mo'):
-     mo = request.GET.get('mo')
-     mo = securing_string(mo)
-
-  if not os.path.exists(ops.workdir + "/videos/" + str(mo)):     
-      m = "mo not found: %s" % ops.workdir + "/videos/" + str(mo)
-      message("vod_http_parameters", m, "warning",None, None)
-      return abort(404, "mo. not found")
-
   try:
-     offset = float(long(request.GET.get('tstart')) / 1000.0)
-  except Exception:
-     offset = 0.0
+    session_id = None
+    if request.GET.get('session'):
+      session_id = request.GET.get('session')
+    try:
+        session_id = float(session_id)
+    except Exception:
+        session_id=time.time()
 
-  return  vod_http(mo, offset, session_id)
+    m = "Request Method: " + request.method
+    message("vod_http_parameters", m, "info", session_id, None)
+
+    m = "Request Headers: " + print_headers(request)
+    message("vod_http_parameters", m, "info", session_id, None)
+
+    mo = ""
+    if request.GET.get('mo'):
+      mo = request.GET.get('mo')
+      mo = securing_string(mo)
+
+    http_range_header = None
+    if not os.path.exists(ops.workdir + "/videos/" + str(mo)):
+        m = "mo not found: %s" % ops.workdir + "/videos/" + str(mo)
+        message("vod_http_parameters", m, "warning",None, None)
+        return abort(404, "mo. not found")
+    else:
+        response.set_header('Accept-Ranges', 'bytes')
+        length = os.path.getsize(ops.workdir + "/videos/" + str(mo))
+        response.set_header('Content-Length', length)
+        http_range_header =  \
+          request.get_header("Range", default=None)
+        # Range: bytes=0-999
+        # Range: bytes=1000-
+    try:
+       offset = float(long(request.GET.get('tstart')) / 1000.0)
+    except Exception:
+       offset = 0.0
+
+    res = None
+    if offset == 0.0:
+        if not http_range_header:
+            res = vod_http(mo, offset, session_id)
+        else:
+            try:
+                offset_min = int(http_range_header.split("=")[1].split("-")[0])
+            except Exception:
+                offset_min = 0
+            try:
+                offset_max = int(http_range_header.split("=")[1].split("-")[1])
+            except Exception:
+                offset_max = None
+
+            res = vod_http_partial_content(mo, offset_min, offset_max, session_id)
+            # res = HTTPResponse(body=res_body, status=200)
+            m = "Partial content (206) Response Headers: \
+               " + print_headers(response)
+            message("vod_http_parameters", m, "info", session_id, None)
+    else:
+        # Si hay parametro tstart valido entonces obviamos el
+        # posicionamiento por cabeceras Range
+        res = vod_http(mo, offset, session_id)
+
+  except Exception, e:
+     m = "Unexpected error: " + repr(e)
+     message("vod_http_parameters", m, "error", session_id, None)
+     res =  abort(500, m)
+
+  m = "Response Headers: " + print_headers(response)
+  message("vod_http_parameters", m, "info", session_id, None)
+
+  return res
+
 
 
 
