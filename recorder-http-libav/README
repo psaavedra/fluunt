@@ -1,5 +1,7 @@
 
-apt-get install build-essential   libavformat-dev
+
+apt-get install libavformat-dev=6:0.8.5-1~bpo60+1 libavcodec-dev=6:0.8.5-1~bpo60+1 libavutil-dev=6:0.8.5-1~bpo60+1
+apt-get install build-essential
 
 gcc  -g -O3 recorder-http-libav.c -o recorder-http-libav -lavformat -lavcodec -lavutil
 
