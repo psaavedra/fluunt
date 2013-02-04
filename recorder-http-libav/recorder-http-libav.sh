@@ -14,6 +14,7 @@ then
 	echo "
 Usage: $0 $URL $KEY $WORKDIR $CHUNKDURATION $SOCKETTIMEOUT
 	"
+	exit -1
 fi
 
 URL=$1
