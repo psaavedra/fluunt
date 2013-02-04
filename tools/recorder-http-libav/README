@@ -1,0 +1,2 @@
+gcc  -g -O3 recorder-http-libav.c -o recorder-http-libav -lavformat -lavcodec -lavutil
+gdb --args ./recorder-http-libav   -w /tmp/ -K dios -C 10 -i http://balancer-rtmp.interoud.net:8082/stream/cuatro
