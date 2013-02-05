@@ -23,6 +23,8 @@ WORKDIR=$3
 CHUNKDURATION=$4
 SOCKETTIMEOUT=$5
 
+mkdir -p $WORKDIR/ts/$KEY/
+
 while [ 1 ]
 do
     wget -t 1 -T $SOCKETTIMEOUT -q -O - $URL | $RECORDER  -w $WORKDIR -K $KEY -C $CHUNKDURATION -i -
