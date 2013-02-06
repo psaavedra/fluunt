@@ -178,7 +178,7 @@ def get_flv_stream(path, offset=0, _id=None, tmp_dir="./tmp/flunnt/flv/offsets/"
           if counter_loops % 50000 == 1:
               m = "Seeaking entry point for FLV media type"
               message("get_flv_stream", m, "DEBUG",_id, None)
-          data = f.read(92) # 23 * 4
+          data = f.read(920) # 23 * 4
                   
           data_find = data.find("\x00\x00\x00\x00")
           if data_find > 11 and (len(data) > data_find + 4 ) and data[data_find-7] in ["\x08","\x09", ]: # ["\x08","\x09","\x12", ]:
@@ -1472,6 +1472,8 @@ def vod_http_parameters():
     else:
         # Si hay parametro tstart valido entonces obviamos el
         # posicionamiento por cabeceras Range
+        # XXX: XXX XXX
+        # res = vod_http(mo, 0, session_id)
         res = vod_http(mo, offset, session_id)
 
   except Exception, e:
