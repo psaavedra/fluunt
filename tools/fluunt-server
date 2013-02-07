@@ -171,17 +171,16 @@ def get_flv_stream(path, offset=0, _id=None, tmp_dir="./tmp/flunnt/flv/offsets/"
     counter_loops = 0
     
     while True:
-      counter_loops = counter_loops + 1
-
+      counter_loops = (counter_loops + 1 ) % 50000
       if seeking_entry_point:
 
-          if counter_loops % 50000 == 1:
+          if counter_loops == 1:
               m = "Seeaking entry point for FLV media type"
-              message("get_flv_stream", m, "DEBUG",_id, None)
-          data = f.read(920) # 23 * 4
+              message("get_flv_stream", m, "INFO",_id, None)
+          data = f.read(368) # 23 * 4 * 3
                   
           data_find = data.find("\x00\x00\x00\x00")
-          if data_find > 11 and (len(data) > data_find + 4 ) and data[data_find-7] in ["\x08","\x09", ]: # ["\x08","\x09","\x12", ]:
+          if data_find > 11 and (len(data) > data_find + 4 ) and data[data_find-7] in ["\x09", ]: # ["\x08","\x09","\x12", ]:
 
               bitflags = data[data_find+4]
 
@@ -221,7 +220,7 @@ def get_flv_stream(path, offset=0, _id=None, tmp_dir="./tmp/flunnt/flv/offsets/"
                   seeking_entry_point = False
                   message("get_flv_stream", "Offset reached", "DEBUG",_id, None)
       else:
-              data = f.read()
+              data = f.read(32768)
               yield data
       
       if len(data) == 0:
@@ -918,7 +917,7 @@ def vod_http_partial_content(media_id, offset_min=0, offset_max=None, session_id
       if not offset_max:
           while True:
               # message("vod_http_partial_content", "... ... \n", "DEBUG",_id, None)
-              data = f.read(4096)
+              data = f.read(32768)
               yield data
               # message("vod_http_partial_content", "... ... 2 \n", "DEBUG",_id, None)
               if len(data) == 0:
@@ -926,7 +925,7 @@ def vod_http_partial_content(media_id, offset_min=0, offset_max=None, session_id
                   message("vod_http_partial_content", m, "DEBUG",_id, None)
                   break
       else:
-          bytes_to_read = 4096
+          bytes_to_read = 32768
           total_bytes_to_read = offset_max - offset_min + 1  # total bytes to read
           while True:
               if total_bytes_to_read < bytes_to_read:
