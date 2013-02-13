@@ -374,11 +374,34 @@ def get_media_info(path):
 
     for i in ffmpeg.stderr:
         if i.count("bitrate:") != 0 and \
-           i.count("start:") != 0 :
-            # Duration: 00:03:21.8, start: 0.000000, bitrate: 1147 kb/s
-            res["duration"] = i.split("Duration: ")[1].split(",")[0]
-            res["bitrate"] = \
-              long(i.split("bitrate: ")[1].split("kb")[0].strip()) * 1024
+        i.count("start:") != 0 :
+            try:
+              # Duration: 00:03:21.8, start: 0.000000, bitrate: 1147 kb/s
+              res["duration"] = i.split("Duration: ")[1].split(",")[0]
+              res["duration_hours"] = int(i.split("Duration: ")[1].split(",")[0].split(":")[0])
+              res["duration_minutes"] = int(i.split("Duration: ")[1].split(",")[0].split(":")[1])
+              res["duration_seconds"] = float(i.split("Duration: ")[1].split(",")[0].split(":")[2])
+              res["total_duration_seconds"] = int( \
+                    res["duration_hours"] * 60 * 60 + \
+                    res["duration_minutes"] * 60 + \
+                    res["duration_seconds"] )
+            except Exception, e:
+              m =  "Output readed for %s path: %s" % (path, i)
+              message("get_media_info", m, "DEBUG", None, None)
+
+              m =  "Error getting duration info for %s: %s" % (path, repr(e))
+              message("get_media_info", m, "WARNING", None, None)
+
+            try:
+              res["bitrate"] = \
+                long(i.split("bitrate: ")[1].split("kb")[0].strip()) * 1024
+            except Exception, e:
+              m =  "Output readed for %s path: %s" % (path, i)
+              message("get_media_info", m, "DEBUG", None, None)
+
+              m =  "Error getting bitrate info for %s: %s" % (path, repr(e))
+              message("get_media_info", m, "WARNING", None, None)
+
         if i.count("Input #0") != 0:
             pass
 
@@ -1437,8 +1460,14 @@ def vod_http_parameters():
         message("vod_http_parameters", m, "warning",None, None)
         return abort(404, "mo. not found")
     else:
+        media_path = ops.workdir + "/videos/" + str(mo)
+        try:
+            response.set_header("Content-Duration", get_media_info(media_path)["total_duration_seconds"])
+        except Exception, e:
+            m = "Content-Duration header can not be generated"
+            message("vod_http_parameters", m, "warning", session_id, None)
         response.set_header('Accept-Ranges', 'bytes')
-        length = os.path.getsize(ops.workdir + "/videos/" + str(mo))
+        length = os.path.getsize(media_path)
         response.set_header('Content-Length', length)
         http_range_header =  \
           request.get_header("Range", default=None)
