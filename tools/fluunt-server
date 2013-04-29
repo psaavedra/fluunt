@@ -219,6 +219,26 @@ def get_flv_stream(path, offset=0, _id=None, tmp_dir="./tmp/flunnt/flv/offsets/"
                   yield r
                   seeking_entry_point = False
                   message("get_flv_stream", "Offset reached", "DEBUG",_id, None)
+
+          if data_find > 11 and (len(data) > data_find + 4 ) and  data[data_find-7] in ["\x08", ]:
+
+              r = data[data_find-11:]
+              timestamp = int(  r[8:11].encode('hex'), 16  )  / 1000.0
+              if timestamp > offset:
+                  hits = hits + 1
+              else:
+                  hits = 0
+              if hits >= 30:
+                  message("get_flv_stream", dump_hex(data), "DEBUG",_id, None)
+                  message("get_flv_stream", dump_hex(r), "DEBUG",_id, None)
+                  message("get_flv_stream", "timestamp: " + repr(timestamp), "DEBUG",_id, None)
+                  yield r
+                  seeking_entry_point = False
+                  message("get_flv_stream", "Offset reached", "DEBUG",_id, None)
+
+
+
+
       else:
               data = f.read(32768)
               yield data
@@ -364,6 +384,7 @@ def get_mp4_stream(path, offset=0, _id=None, tmp_dir="./tmp/flunnt/mp4/offsets/"
         yield ""
 
 def get_media_info(path):
+    # files = get_listdir(ops.workdir + "/cache/videos/" + str(channel_id))
     res = {}
 
     cmd = '''ffmpeg -i %s''' % path
@@ -1423,9 +1444,9 @@ def pvr_http_url(channel_id, date):
   return pvr_http(timer,channel_id)
 
 
-
-@route(PREFIX_PATH +  '/play')
-def vod_http_parameters():
+@route(PREFIX_PATH + '/play')
+@route(PREFIX_PATH + '<path:path>')
+def vod_http_parameters(path=None):
   """
   Parameters:
       mo=rp_domingos_riazor_03-01-2013.flv
@@ -1435,6 +1456,7 @@ def vod_http_parameters():
 
   """
   try:
+
     session_id = None
     if request.GET.get('session'):
       session_id = request.GET.get('session')
@@ -1443,6 +1465,9 @@ def vod_http_parameters():
     except Exception:
         session_id=time.time()
 
+    m = "Request parameters: " + repr(request.query_string)
+    message("vod_http_parameters", m, "info", session_id, None)
+
     m = "Request Method: " + request.method
     message("vod_http_parameters", m, "info", session_id, None)
 
@@ -1450,9 +1475,11 @@ def vod_http_parameters():
     message("vod_http_parameters", m, "info", session_id, None)
 
     mo = ""
+    if path:
+        mo = path
     if request.GET.get('mo'):
       mo = request.GET.get('mo')
-      mo = securing_string(mo)
+    mo = securing_string(mo)
 
     http_range_header = None
     if not os.path.exists(ops.workdir + "/videos/" + str(mo)):
@@ -1461,11 +1488,6 @@ def vod_http_parameters():
         return abort(404, "mo. not found")
     else:
         media_path = ops.workdir + "/videos/" + str(mo)
-        try:
-            response.set_header("Content-Duration", get_media_info(media_path)["total_duration_seconds"])
-        except Exception, e:
-            m = "Content-Duration header can not be generated"
-            message("vod_http_parameters", m, "warning", session_id, None)
         response.set_header('Accept-Ranges', 'bytes')
         length = os.path.getsize(media_path)
         response.set_header('Content-Length', length)
@@ -1483,6 +1505,13 @@ def vod_http_parameters():
         if not http_range_header:
             res = vod_http(mo, offset, session_id)
         else:
+            try:
+                # pass
+                response.set_header("Content-Duration", get_media_info(media_path)["total_duration_seconds"])
+            except Exception, e:
+                m = "Content-Duration header can not be generated: %s" % e
+                message("vod_http_parameters", m, "warning", session_id, None)
+
             try:
                 offset_min = int(http_range_header.split("=")[1].split("-")[0])
             except Exception:
@@ -1528,6 +1557,6 @@ if __name__ == '__main__':
         # bottle.run(server=bottle.CherryPyServer, port=ops.port, host=ops.ip, 200)
         bottle.run(server=bottle.PasteServer, port=ops.port, host=ops.ip,
                 quiet=True,
-                use_threadpool=True, threadpool_workers=200)
+                use_threadpool=True, threadpool_workers=150)
 
 
