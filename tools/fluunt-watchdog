@@ -13,12 +13,12 @@ echo "RES: $RES"
 echo "EXPECTED_RES: $EXPECTED_RES"
 if [ $EXPECTED_RES -ne $RES ] || [ "$6" == "force" ]
 then
-  echo "Rebooting flunnt-server" 
-  date >> /var/log/flunnt-server-reboot.log
+  echo "Rebooting fluunt-server" 
+  date >> /var/log/fluunt/flunnt-server-reboot.log
   kill -9  `ps auxwf  |  grep server | grep python | grep npvr |  awk '{print $2}'` 
   # killall python
   sleep 5
-  ( /usr/bin/python /opt/fluunt-server -v info -i $1 -p $2 -T 15 -M 25 -c 4 -w $3 -C $4 -L /var/log/flunnt-server.log ) > /dev/null 2>&1 &
+  ( /usr/bin/python /opt/fluunt-server -v info -i $1 -p $2 -T 15 -M 25 -c 4 -w $3 -C $4 -L /var/log/fluunt/flunnt-server.log ) > /dev/null 2>&1 &
 fi
 
 exit 0
