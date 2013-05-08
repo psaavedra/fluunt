@@ -23,12 +23,12 @@ Installation::
 Watchdog::
 
   (cronjobs)
-  0   7,2 * * * fluunt /opt/fluunt/tools/fluunt-watchdog 127.0.0.1 8000 /mnt/vod/fluunt /pvr/ts check.txt force > /dev/null 2&>1
-  */1 * * * *   flunnt /opt/fluunt/tools/fluunt-watchdog 127.0.0.1 8000 /mnt/vod/fluunt /pvr/ts check.txt > /dev/null 2&>1
+  0   7,2 * * * root /opt/fluunt/tools/fluunt-watchdog 127.0.0.1 8000 /mnt/vod/fluunt /pvr/ts check.txt force > /dev/null 2&>1
+  */1 * * * *   root /opt/fluunt/tools/fluunt-watchdog 127.0.0.1 8000 /mnt/vod/fluunt /pvr/ts check.txt > /dev/null 2&>1
 
 Start:: 
 
- * (as fluunt user) /opt/fluunt/tools/fluunt-watchdog 127.0.0.1 8000 /mnt/vod/fluunt /pvr/ts check.txt force
+  /opt/fluunt/tools/fluunt-watchdog 127.0.0.1 8000 /mnt/vod/fluunt /pvr/ts check.txt force
 
 Logging::
 
