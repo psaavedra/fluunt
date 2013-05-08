@@ -1,6 +1,46 @@
+
+Document status: **Early draft**
+
 Depends:
 
+ python: 2.6  at least
  bootle: 0.11.5 at least
  paste:  1.7.5.1 at least
 
+Installation::
+
+ * adduser fluunt
+ * mkdir /var/log/fluunt
+ * mkdir /mnt/vod/fluunt
+ * mkdir -p /mnt/vod/fluunt/pvr/ts
+ * mkdir -p /mnt/vod/fluunt/videos
+ * cd /opt
+ * git clone https://github.com/psaavedra/fluunt.git fluunt
+ * chown -R fluunt.fluunt /var/log/fluunt
+ * chown -R fluunt.fluunt /mnt/vod/fluunt
+ * chown -R fluunt.fluunt /opt/fluunt
+
+Watchdog::
+
+  (cronjobs)
+  0   7,2 * * * fluunt /opt/fluunt/tools/fluunt-watchdog 127.0.0.1 8000 /mnt/vod/fluunt /pvr/ts check.txt force > /dev/null 2&>1
+  */1 * * * *   flunnt /opt/fluunt/tools/fluunt-watchdog 127.0.0.1 8000 /mnt/vod/fluunt /pvr/ts check.txt > /dev/null 2&>1
+
+Start:: 
+
+ * (as fluunt user) /opt/fluunt/tools/fluunt-watchdog 127.0.0.1 8000 /mnt/vod/fluunt /pvr/ts check.txt force
+
+Logging::
+
+  (logrotate)
+  /var/log/fluunt/*.log {
+	daily
+	missingok
+	rotate 52
+	compress
+	delaycompress
+	# notifempty
+	create 640 fluunt fluunt
+	sharedscripts
+  }
 
