@@ -113,7 +113,7 @@ signal.signal(signal.SIGHUP, signal_hup_handler)
 def message(module, mess, severity=LOG_SEVERITIES[6], identifier=None, peer=None):
   global VERBOSITY_LEVEL
   global LOG_SEVERITIES
-  
+
   i_s = 6
   try:
       i_s = LOG_SEVERITIES.index(severity.lower())
@@ -498,9 +498,9 @@ def securing_string(string, strings_to_avoid=["./","*","^"]):
         return securing_string(res)
 
 
-def pvr_hls(timer,chunkoffset,channel_id):
+def pvr_hls(chunkoffset,channel_id, starttime, endtime=None):
 
-  # TODO: Habria que establecer un tiempo de margen en el timer
+  # TODO: Habria que establecer un tiempo de margen en el starttime
   # por el cual se considera que una petición es demasiado antigua en el
   # tiempo con respecto al time del primer chunk encontrado.
 
@@ -509,8 +509,17 @@ def pvr_hls(timer,chunkoffset,channel_id):
 
   m = ""
   try:
-      m = "Timer set to: " + str(timer) + \
-            " (" + datetime.utcfromtimestamp(float(timer)).isoformat() + ")"
+      m = "Timer set to: " + str(starttime) + \
+            " (" + datetime.utcfromtimestamp(float(starttime)).isoformat() + ")"
+  except Exception, e:
+      m = str(e)
+  message("pvr_hls", m, "INFO", None, None)
+  try:
+      if endtime:
+          m = "End Timer set to: " + str(endtime) + \
+            " (" + datetime.utcfromtimestamp(float(endtime)).isoformat() + ")"
+      else:
+          m = "End Timer set to: None"
   except Exception, e:
       m = str(e)
   message("pvr_hls", m, "INFO", None, None)
@@ -519,7 +528,7 @@ def pvr_hls(timer,chunkoffset,channel_id):
   message("pvr_hls", m, "INFO", None, None)
 
   files = get_listdir(ops.workdir + "/pvr/ts/" + str(channel_id))
-  position  = get_next_higher_filename_position(files, str(timer))
+  position  = get_next_higher_filename_position(files, str(starttime))
 
   m = ""
   if position >= len(files):
@@ -531,14 +540,14 @@ def pvr_hls(timer,chunkoffset,channel_id):
 
   if position >= len(files):
 
-      # XXX: Waiting for current recording chunks
+      # XXX: Waiting for current recording chunnks
       m = "Waiting for current recording chunks (" \
                 + str(ops.maxchunkduration) + " seconds)"
       message("pvr_hls", m, "warning", None, None)
       time.sleep(int(ops.maxchunkduration))
 
       files = get_listdir(ops.workdir + "/pvr/ts/" + str(channel_id))
-      position  = get_next_higher_filename_position(files, str(timer))
+      position  = get_next_higher_filename_position(files, str(starttime))
 
       if position >= len(files):
           m = "Returning 404 - No chunks found: position >= len(files)"
@@ -549,7 +558,7 @@ def pvr_hls(timer,chunkoffset,channel_id):
 
   # Chunks found since time and chunkoffset
   chunks = []
-  chunks_needed = int(ops.chunkstoserve)
+  ### chunks_needed = int(ops.chunkstoserve)
   # Pointer to the current chunk number to be processed by the while loop
   current_chunk_number = int(chunkoffset)
   # feched is activated when we found a chunk equal to the current_chunk 
@@ -564,8 +573,9 @@ def pvr_hls(timer,chunkoffset,channel_id):
   # fetching the chunks with current_chunk_number 
   previous_chunk_number=None
   while True:
-      if chunks_needed <= 0:
-          break
+      ### if chunks_needed <= 0:
+      ###     break
+
 
       if position >= len(files):
           break
@@ -576,9 +586,15 @@ def pvr_hls(timer,chunkoffset,channel_id):
           # print position
           # print current_chunk_number
           # print files[position]
+          timestamp = int(timestamp)
       except:
           position == position + 1
           continue
+
+      if feched and endtime and endtime < timestamp:
+          m = "End time reached"
+          message("pvr_hls", m, "INFO", None, None)
+          break
 
       if int(chunk_number) < current_chunk_number:
           if not feched:
@@ -599,7 +615,7 @@ def pvr_hls(timer,chunkoffset,channel_id):
           chunks.append(files[position])
           current_chunk_number = current_chunk_number + 1
           position = position + 1
-          chunks_needed = chunks_needed - 1
+          ### chunks_needed = chunks_needed - 1
           continue
 
       if int(chunk_number) > current_chunk_number:
@@ -637,9 +653,9 @@ def pvr_hls(timer,chunkoffset,channel_id):
       m3u8_body = m3u8_body + ops.chunkserverpath + "/" + channel_id + "/" + c + "\n\n"
 
     m3u8_footer = ""
-    # # EXT-X-ENDLIST cause the end of the stream
-    # if len(c) == 0:
-    #     m3u8_footer = "#EXT-X-ENDLIST\n"
+    # EXT-X-ENDLIST cause the end of the stream
+    if endtime:
+      m3u8_footer = "#EXT-X-ENDLIST\n"
 
     m3u8 = m3u8_header + m3u8_body + m3u8_footer
   except Exception, e:
@@ -1238,12 +1254,13 @@ def pvr_hls_parameters(channel_id):
 
   # Suring access to files entries cached
   timer = int(time.time()) - ops.maxchunkduration * 2
+  endtime = None
 
   if request.GET.get('time'):
       timer = request.GET.get('time')
   else:
       m = "Not time parameter received"
-      message("pvr_hls_parameters", m, "debug",None, None)
+      message("pvr_hls_parameters", m, "debug", None, None)
 
       # date example: 2011-10-14_5:29:43
       if request.GET.get('date'):
@@ -1258,6 +1275,25 @@ def pvr_hls_parameters(channel_id):
           m = "Not date parameter received"
           message("pvr_hls_parameters", m, "debug",None, None)
 
+  if request.GET.get('endtime'):
+      endtime = request.GET.get('endtime')
+  else:
+      m = "Not endtime parameter received"
+      message("pvr_hls_parameters", m, "debug",None, None)
+
+      # enddate example: 2011-10-14_5:29:43
+      if request.GET.get('enddate'):
+            enddate = request.GET.get('enddate')
+            try:
+                enddate_object = datetime.strptime(enddate, '%Y-%m-%d_%H:%M:%S')
+                endtime = int(calendar.timegm(enddate_object.utctimetuple()))
+            except ValueError:
+                m = "Incorrect enddate format. Expected: %Y-%m-%d_%H:%M:%S"
+                message("pvr_hls_parameters", m, "warning",None, None)
+      else:
+          m = "No enddate parameter received"
+          message("pvr_hls_parameters", m, "debug",None, None)
+
   chunkoffset = 1
   try:
       chunkoffset = int(request.GET.get('chunkoffset'))
@@ -1265,8 +1301,76 @@ def pvr_hls_parameters(channel_id):
       m = "Not chunkoffset parameter received"
       message("pvr_hls_parameters", m, "debug",None, None)
 
-  return pvr_hls(timer,chunkoffset,channel_id)
+  return pvr_hls(chunkoffset,channel_id, timer, endtime)
 
+
+@route(PREFIX_PATH +  '/pvr/:channel_id/:date/hls.m3u8')
+def pvr_hls_url_start(channel_id, date):
+  """
+  For example:
+    channel_id = divinity_udp_239.192.201.5_1234
+    or
+    channel_id = divinitybyhttp
+
+    date: %Y-%m-%d_%H:%M:%S
+  """
+
+  # Securization of channel_id value.
+  channel_id = securing_string(channel_id)
+
+  if not os.path.exists(ops.workdir + "/pvr/ts/" + str(channel_id)):
+      return abort(404, "Channel id. not found")
+
+  # Suring access to files entries cached
+  timer = int(time.time()) - ops.maxchunkduration * 2
+
+  try:
+      date_object = datetime.strptime(date, '%Y-%m-%d_%H:%M:%S')
+      timer = int(calendar.timegm(date_object.utctimetuple()))
+  except ValueError:
+      m = "Incorrect date format. Expected: %Y-%m-%d_%H:%M:%S"
+      message("pvr_hls_parameters", m, "warning",None, None)
+
+  return pvr_hls(1,channel_id, timer, None)
+
+
+
+@route(PREFIX_PATH +  '/pvr/:channel_id/:date/:enddate/hls.m3u8')
+def pvr_hls_url_start_end(channel_id, date, enddate):
+  """
+  For example:
+    channel_id = divinity_udp_239.192.201.5_1234
+    or
+    channel_id = divinitybyhttp
+
+    date and enddate: %Y-%m-%d_%H:%M:%S
+  """
+
+  # Securization of channel_id value.
+  channel_id = securing_string(channel_id)
+
+  if not os.path.exists(ops.workdir + "/pvr/ts/" + str(channel_id)):
+      return abort(404, "Channel id. not found")
+
+  # Suring access to files entries cached
+  timer = int(time.time()) - ops.maxchunkduration * 2
+  endtime = None
+
+  try:
+      date_object = datetime.strptime(date, '%Y-%m-%d_%H:%M:%S')
+      timer = int(calendar.timegm(date_object.utctimetuple()))
+  except ValueError:
+      m = "Incorrect date format. Expected: %Y-%m-%d_%H:%M:%S"
+      message("pvr_hls_parameters", m, "warning",None, None)
+
+  try:
+      enddate_object = datetime.strptime(enddate, '%Y-%m-%d_%H:%M:%S')
+      endtime = int(calendar.timegm(enddate_object.utctimetuple()))
+  except ValueError:
+      m = "Incorrect enddate format. Expected: %Y-%m-%d_%H:%M:%S"
+      message("pvr_hls_parameters", m, "warning",None, None)
+
+  return pvr_hls(1,channel_id, timer, endtime)
 
 
 
