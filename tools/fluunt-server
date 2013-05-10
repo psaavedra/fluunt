@@ -1210,6 +1210,16 @@ message("main", m, "INFO", None, None)
 #     print "Hola"
 
 
+@route(PREFIX_PATH +  '/crossdomain.xml')
+def crossdomain_xml():
+    res = '''
+<? xml version="1.0">
+<cross-domain-policy>
+<allow-access-from domain="*" /></allow>
+</cross>
+'''
+    return res
+
 
 @route(PREFIX_PATH +  '/reencapsulation/:format_')
 def reencapsulation_http_url(format_):
