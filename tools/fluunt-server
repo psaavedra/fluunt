@@ -1213,10 +1213,12 @@ message("main", m, "INFO", None, None)
 @route(PREFIX_PATH +  '/crossdomain.xml')
 def crossdomain_xml():
     res = '''
-<? xml version="1.0">
+<?xml version="1.0"?>
+<!DOCTYPE cross-domain-policy SYSTEM "http://www.adobe.com/xml/dtds/cross-domain-policy.dtd">
 <cross-domain-policy>
-<allow-access-from domain="*" /></allow>
-</cross>
+<allow-access-from domain="*" />
+<site-control permitted-cross-domain-policies="all"/>
+</cross-domain-policy>
 '''
     return res
 
