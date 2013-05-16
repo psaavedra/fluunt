@@ -500,6 +500,8 @@ def securing_string(string, strings_to_avoid=["./","*","^"]):
 
 def pvr_hls(chunkoffset,channel_id, starttime, endtime=None):
 
+  is_live = False if endtime else True
+
   # TODO: Habria que establecer un tiempo de margen en el starttime
   # por el cual se considera que una petición es demasiado antigua en el
   # tiempo con respecto al time del primer chunk encontrado.
@@ -559,6 +561,7 @@ def pvr_hls(chunkoffset,channel_id, starttime, endtime=None):
   # Chunks found since time and chunkoffset
   chunks = []
   ### chunks_needed = int(ops.chunkstoserve)
+  chunks_needed = 3
   # Pointer to the current chunk number to be processed by the while loop
   current_chunk_number = int(chunkoffset)
   # feched is activated when we found a chunk equal to the current_chunk 
@@ -573,8 +576,8 @@ def pvr_hls(chunkoffset,channel_id, starttime, endtime=None):
   # fetching the chunks with current_chunk_number 
   previous_chunk_number=None
   while True:
-      ### if chunks_needed <= 0:
-      ###     break
+      if chunks_needed <= 0 is is_live:
+          break
 
 
       if position >= len(files):
@@ -615,7 +618,7 @@ def pvr_hls(chunkoffset,channel_id, starttime, endtime=None):
           chunks.append(files[position])
           current_chunk_number = current_chunk_number + 1
           position = position + 1
-          ### chunks_needed = chunks_needed - 1
+          chunks_needed = chunks_needed - 1
           continue
 
       if int(chunk_number) > current_chunk_number:
@@ -641,12 +644,20 @@ def pvr_hls(chunkoffset,channel_id, starttime, endtime=None):
 
   try:
     m3u8_header = "#EXTM3U\n\n"
+    m3u8_header = m3u8_header + "#EXT-X-VERSION:3\n\n"
     m3u8_header = m3u8_header + "#EXT-X-MEDIA-SEQUENCE:%s\n\n" % sequence
     # duration = 2
     m3u8_header = m3u8_header + "#EXT-X-TARGETDURATION:%s\n\n" \
       % (int(duration))
 
     m3u8_body = ""
+
+    # XXX: Hack demo de OTT de R
+    try:
+      chunks = chunks[:-1]
+    except:
+      pass
+    # End XXX
     for c in chunks:
       timestamp,duration,chunk = c.split(".ts")[0].split("_")
       m3u8_body = m3u8_body + "#EXTINF:%s,\n" % duration
