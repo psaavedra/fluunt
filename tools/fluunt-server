@@ -599,7 +599,7 @@ def pvr_hls(chunkoffset,channel_id, starttime, endtime=None):
           message("pvr_hls", m, "INFO", None, None)
           break
 
-      if int(chunk_number) < current_chunk_number:
+      if is_live and int(chunk_number) < current_chunk_number:
           if not feched:
               if previous_chunk_number and \
                  int(previous_chunk_number) > int(chunk_number):
@@ -613,7 +613,7 @@ def pvr_hls(chunkoffset,channel_id, starttime, endtime=None):
           else:
               break
 
-      if int(chunk_number) == current_chunk_number:
+      if not is_live or int(chunk_number) == current_chunk_number:
           feched = True
           chunks.append(files[position])
           current_chunk_number = current_chunk_number + 1
