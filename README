@@ -4,7 +4,7 @@ Document status: **Early draft**
 Depends:
 
  python: 2.6  at least
- bootle: 0.11.5 at least
+ bottle: 0.11.5 at least
  paste:  1.7.5.1 at least
  ffmpeg
 
