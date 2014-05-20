@@ -50,9 +50,9 @@ DEV_NULL=open('/dev/null', "w")
 
 LOG_FILE = "./server.log"
 LOG_FILE_FD = None
+LOG_LEVEL = 20
 LOG_SEVERITIES = \
     ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"]
-VERBOSITY_LEVEL = LOG_SEVERITIES[6]
 
 CACHE_LISTDIR_TIME=10
 STREAM_NOLIMIT=False
@@ -60,8 +60,20 @@ STREAM_NOLIMIT=False
 # SUBPROCESS_TIMES = { <<process>>:<<epoch>>, }
 SUBPROCESS_TIMES={}
 
+
+logfile = "/dev/stdout"
+loglevel = 20
+
+
 cache_listdir_value = {}
 cache_listdir_timer={}
+
+
+###############################################################################
+
+
+
+
 
 
 def print_headers(r):
@@ -110,30 +122,26 @@ signal.signal(signal.SIGUSR1, signal_hup_handler)
 signal.signal(signal.SIGHUP, signal_hup_handler)
 
 
-def message(module, mess, severity=LOG_SEVERITIES[6], identifier=None, peer=None):
-  global VERBOSITY_LEVEL
-  global LOG_SEVERITIES
+def message(module, mess, severity="info", identifier=None, peer=None):
+  global logger
 
-  i_s = 6
-  try:
-      i_s = LOG_SEVERITIES.index(severity.lower())
-  except ValueError:
-      pass
-  i_l = LOG_SEVERITIES.index(VERBOSITY_LEVEL.lower())
+  severity = severity.lower()
 
-  if i_s <= i_l:
-    res = "[%s]" % str(datetime.utcfromtimestamp(float(time.time())).isoformat())
+  msg_by_level = {}
+  msg_by_level["emerg"] = logger.critical
+  msg_by_level["alert"] = logger.critical
+  msg_by_level["crit"] = logger.critical
+  msg_by_level["err"] = logger.error
+  msg_by_level["warning"] = logger.warning
+  msg_by_level["notice"] = logger.info
+  msg_by_level["info"] = logger.info
+  msg_by_level["debug"] = logger.debug
 
-    if severity:
-      res = res + " [%s]" % str(severity).upper()
-    else:
-      res = res + " [-]"
+  res = "[%s]" % str(module)
 
-    res = res + " [%s]" % str(module)
-
-    if peer:
+  if peer:
       res = res + " [%s]" % str(peer)
-    else:
+  else:
       try:
         if request.header.get('X-Real-IP'):
           res = res + " [%s]" % str( request.header.get('X-Real-IP') )
@@ -142,17 +150,14 @@ def message(module, mess, severity=LOG_SEVERITIES[6], identifier=None, peer=None
       except:
         res = res + " [-]"
 
-    if identifier:
+  if identifier:
       res = res + " [%s]" % str(identifier)
-    else:
+  else:
       res = res + " [-]"
 
-    res = res + " " + str(mess)
+  res = res + " " + str(mess)
 
-    LOG_FILE_FD.write(res + "\n")
-    LOG_FILE_FD.flush()
-
-
+  msg_by_level[severity](res)
 
 
 
@@ -1167,10 +1172,9 @@ parser.add_option("-F", "--fastcgi",
         action="store_true", dest="fcgi", default=False,
         help="Run as FastCGI server")
 
-parser.add_option("-v", "--verbose",
-        dest="verbose", default="INFO",
-        help="Verbosity level (default: %s) (ops: %s)"
-            % (str(VERBOSITY_LEVEL),str(LOG_SEVERITIES)))
+parser.add_option("--loglevel",
+                dest="loglevel", help="Log level (default: %s)" % LOG_LEVEL,
+                default=LOG_LEVEL, type="int")
 
 parser.add_option("-L", "--logfile",
         dest="logfile", default=LOG_FILE,
@@ -1191,24 +1195,26 @@ parser.add_option("-c", "--chunkstoserve", dest="chunkstoserve",
 
 ################################################################################
 
-
 PREFIX_PATH = ops.prefixpath
 CACHE_LISTDIR_TIME = ops.cachetimeout
 
-try:
-    LOG_FILE_FD = open(ops.logfile, "a+b")
-except Exception, e:
-    print "Can not open %s file: %s" % (ops.logfile, str(e))
-    sys.exit (-1)
+# logging ######################################################################
+import logging
+hdlr = logging.FileHandler(ops.logfile)
+hdlr.setFormatter(logging.Formatter('%(levelname)s %(asctime)s %(message)s'))
+logger = logging.getLogger('fluunt')
+logger.addHandler(hdlr)
+logger.setLevel(ops.loglevel)
 
-v = ops.verbose.lower()
-if LOG_SEVERITIES.__contains__(v):
-    VERBOSITY_LEVEL = v
+
+# setting up ###################################################################
+
+logger.info("Default encoding: %s" % sys.getdefaultencoding())
 
 m = "Starting server"
 message("main", m, "INFO", None, None)
 
-m = "Verbosity level set to: %s" % VERBOSITY_LEVEL
+m = "Verbosity level set to: %s" % ops.loglevel
 message("main", m, "INFO", None, None)
 
 
@@ -1256,8 +1262,6 @@ def pvr_channels():
   res["channels"] = files
 
   return res
-
-
 
 
 @route(PREFIX_PATH +  '/pvr/:channel_id/hls.m3u8')
