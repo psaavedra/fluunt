@@ -1740,6 +1740,52 @@ def server_status():
     return res
 
 
+@route(PREFIX_PATH +  '/server/streams/count')
+def server_status():
+    """
+    """
+    global SESSIONS_STATUS
+
+    mo_startswith = None
+    if request.GET.get('mo_startswith'):
+        mo_startswith = request.GET.get('mo_startswith')
+
+    mo_find = None
+    if request.GET.get('mo_find'):
+        mo_find = request.GET.get('mo_find')
+
+    counter = 0
+
+    for k1 in SESSIONS_STATUS.keys():
+        try:
+            for k2 in SESSIONS_STATUS[k1].keys():
+                try:
+                    session_status = SESSIONS_STATUS[k1][k2]
+                    if session_status["last_time"] + 30 < time.time():
+                        SESSIONS_STATUS[k1].pop(k2)
+                    else:
+                        if mo_find and 0 > session_status["mo"].find(mo_find):
+                            continue
+                        if mo_startswith and not session_status["mo"].startswith(mo_startswith):
+                            continue
+                        counter += 1
+                except:
+                    m = "Unexpected error counting MO's into a session"
+                    message("server_status", m, "err")
+
+            if len(SESSIONS_STATUS[k1]) == 0:
+                SESSIONS_STATUS.pop(k1)
+        except:
+            m = "Unexpected error counting number of sessions"
+            message("server_status", m, "err")
+
+    res = {}
+    res["count"] = counter
+
+    response.content_type = 'application/json'
+    return res
+
+
 
 
 
