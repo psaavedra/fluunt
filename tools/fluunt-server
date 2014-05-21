@@ -30,6 +30,9 @@ F L V 01 05 00 00 00 09      FLV_HEADER (9 bytes)
 import os
 import sys
 import subprocess
+import uuid
+
+from json import dumps
 
 import bottle
 from bottle import route, run, view
@@ -49,7 +52,6 @@ import subprocess
 DEV_NULL=open('/dev/null', "w")
 
 LOG_FILE = "./server.log"
-LOG_FILE_FD = None
 LOG_LEVEL = 20
 LOG_SEVERITIES = \
     ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"]
@@ -60,67 +62,16 @@ STREAM_NOLIMIT=False
 # SUBPROCESS_TIMES = { <<process>>:<<epoch>>, }
 SUBPROCESS_TIMES={}
 
+STREAMS_STATUS = {}
 
 logfile = "/dev/stdout"
 loglevel = 20
-
 
 cache_listdir_value = {}
 cache_listdir_timer={}
 
 
 ###############################################################################
-
-
-
-
-
-
-def print_headers(r):
-    res = "["
-    for k,v in r.headers.iteritems():
-      res = res + str(k) + ":" + str(v) + ", "
-    res = res + "]"
-    return res
-
-
-def dump_hex(data):
-    res = ""
-    for i in data:
-        res = res + i.encode("hex") + " "
-    return res
-
-
-def signal_term_handler(signal, frame):
-    global LOG_FILE_FD
-    print 'Stoppping server ... '
-    m = "Signal number %s detected. Stoppping server" % str(signal)
-    message("signal_term_handler", m, "INFO", None, None)
-
-    LOG_FILE_FD.close()
-    sys.exit(0)
-
-def signal_hup_handler(signal, frame):
-    global LOG_FILE_FD
-    print 'Reloading server ... '
-    m = "Signal number %s detected. Reloading server" % str(signal)
-    message ("signal_hup_handler",  m, "INFO", None, None)
-
-    n = LOG_FILE_FD.name
-
-    try:
-      LOG_FILE_FD.close()
-      LOG_FILE_FD = open(ops.logfile, "a+b")
-    except Exception, e:
-      print "Can not open %s file: %s" % (n, str(e))
-      sys.exit (-1)
-
-
-signal.signal(signal.SIGINT, signal_term_handler)
-signal.signal(signal.SIGTERM, signal_term_handler)
-signal.signal(signal.SIGUSR1, signal_hup_handler)
-signal.signal(signal.SIGHUP, signal_hup_handler)
-
 
 def message(module, mess, severity="info", identifier=None, peer=None):
   global logger
@@ -143,8 +94,10 @@ def message(module, mess, severity="info", identifier=None, peer=None):
       res = res + " [%s]" % str(peer)
   else:
       try:
-        if request.header.get('X-Real-IP'):
-          res = res + " [%s]" % str( request.header.get('X-Real-IP') )
+        if request.get_header('X-Real-IP', default=None):
+          res = res + " [%s]" % str( request.get_header('X-Real-IP') )
+        elif request.get_header('X-Forwarded-For', default=None):
+          res = res + " [%s]" % str( request.get_header('X-Forwarded-For') )
         else:
           res = res + " [%s]" % str(request.environ["REMOTE_ADDR"])
       except:
@@ -153,7 +106,10 @@ def message(module, mess, severity="info", identifier=None, peer=None):
   if identifier:
       res = res + " [%s]" % str(identifier)
   else:
-      res = res + " [-]"
+      try:
+          res = res + " [%s]" % str(request.session_id)
+      except Exception, e :
+          res = res + " [-]"
 
   res = res + " " + str(mess)
 
@@ -161,29 +117,212 @@ def message(module, mess, severity="info", identifier=None, peer=None):
 
 
 
+def get_session(func):
+    def wrapper(**kwargs):
+        message("get_session", "Looking for submited session_id", "debug",None, None)
+
+        session_id = request.get_cookie("session")
+        if request.GET.get('session'):
+            session_id = request.GET.get('session')
+
+        if not session_id:
+            u = uuid.uuid1()
+            session_id = u.hex
+            message("get_session", "New session_id: %s" % session_id,
+                    "debug",session_id, None)
+            request.new_session = True
+        else:
+            message("get_session", "Session_id: %s" % session_id,
+                    "debug",session_id, None)
+
+        session_id = str(session_id)
+
+        try:
+            response.set_cookie("session", session_id)
+            request.session_id = session_id
+        except Exception, e:
+            message("get_session", "Exception: %s" % e, "CRIT",None, None)
+
+        return func(**kwargs)
+
+    return wrapper
+
+
+def common_actions_vod(func):
+    def wrapper(**kwargs):
+        message("common_actions_vod", "Common actions", "debug",None, None)
+        message("common_actions_vod", "kwargs: %s" % dumps(kwargs), "debug",None, None)
+
+        m = "Request parameters: " + repr(request.query_string)
+        message("common_actions_vod", m, "info", None, None)
+
+        m = "Request Method: " + request.method
+        message("common_actions_vod", m, "debug", None, None)
+
+        m = "Request Headers: " + print_headers(request)
+        message("common_actions_vod", m, "info", None, None)
+
+        mo = ""
+        if kwargs.has_key("path"):
+            mo = kwargs["path"]
+        if request.GET.get('mo'):
+            mo = request.GET.get('mo')
+
+        mo = securing_string(mo)
+        request.mo = mo
+        message("common_actions_vod", "MO: %s" % mo, "debug",None, None)
+
+        if not os.path.exists(ops.workdir + "/videos/" + str(mo)):
+            m = "mo not found: %s" % ops.workdir + "/videos/" + str(mo)
+            message("common_actions_vod", m, "warning",None, None)
+            return abort(404, "mo. not found")
+
+        return func(**kwargs)
+    return wrapper
+
+
+def common_actions_pvr(func):
+    def wrapper(**kwargs):
+        message("common_actions_pvr", "Common actions", "debug",None, None)
+        message("common_actions_pvr", "kwargs: %s" % dumps(kwargs), "debug",None, None)
+
+        m = "Request parameters: " + repr(request.query_string)
+        message("common_actions_pvr", m, "info", None, None)
+
+        m = "Request Method: " + request.method
+        message("common_actions_pvr", m, "debug", None, None)
+
+        m = "Request Headers: " + print_headers(request)
+        message("common_actions_pvr", m, "info", None, None)
+
+        # Securization of channel_id value.
+        channel_id = securing_string(kwargs["channel_id"])
+        request.pvr_channel_id = channel_id
+
+        if not os.path.exists(ops.workdir + "/pvr/ts/" + str(channel_id)):
+            return abort(404, "Channel id. not found")
+
+        # Assuring access to files entries cached
+        timer = int(time.time() - ops.maxchunkduration * 1.5 )
+        endtimer = None
+
+        if kwargs.has_key("date"):
+            try:
+                date_object = \
+datetime.strptime(kwargs["date"] + "_UTC" , '%Y-%m-%d_%H:%M:%S_%Z')
+                timer = int(calendar.timegm(date_object.utctimetuple()))
+            except ValueError:
+                m = "Incorrect date format on URL. Expected: %Y-%m-%d_%H:%M:%S"
+                message("common_actions_pvr", m, "warning",None, None)
+
+        # date example: 2011-10-14_5:29:43
+        if request.GET.get('date'):
+            date = request.GET.get('date')
+            try:
+                date_object = datetime.strptime(date, '%Y-%m-%d_%H:%M:%S')
+                timer = int(calendar.timegm(date_object.utctimetuple()))
+            except ValueError:
+                m = "Incorrect format on date parameter. Expected: %Y-%m-%d_%H:%M:%S"
+                message("common_actions_pvr", m, "warning",None, None)
+
+        if request.GET.get('time'):
+            timer = request.GET.get('time')
+
+        request.pvr_timer = timer
+        message("common_actions_pvr", "Timer: %s" % timer, "debug",None, None)
+
+        if kwargs.has_key("endate"):
+            try:
+                date_object = \
+datetime.strptime(kwargs["enddate"] + "_UTC" , '%Y-%m-%d_%H:%M:%S_%Z')
+                endtimer = int(calendar.timegm(date_object.utctimetuple()))
+            except ValueError:
+                m = "Incorrect enddate format on URL. Expected: %Y-%m-%d_%H:%M:%S"
+                message("common_actions_pvr", m, "warning",None, None)
+
+        # enddate example: 2011-10-14_5:29:43
+        if request.GET.get('enddate'):
+            date = request.GET.get('enddate')
+            try:
+                date_object = datetime.strptime(date, '%Y-%m-%d_%H:%M:%S')
+                endtimer = int(calendar.timegm(date_object.utctimetuple()))
+            except ValueError:
+                m = "Incorrect format on enddate parameter. Expected: %Y-%m-%d_%H:%M:%S"
+                message("common_actions_pvr", m, "warning",None, None)
+
+        if request.GET.get('endtime'):
+            endtimer = request.GET.get('endtime')
+
+
+        request.pvr_endtimer = endtimer
+        message("common_actions_pvr", "Endtimer: %s" % endtimer, "debug",None, None)
+
+        chunkoffset = 1
+        try:
+            if request.GET.get('chunkoffset'):
+                chunkoffset = int(request.GET.get('chunkoffset'))
+        except Exception, e:
+            m = "Invalid value in the chunkoffset parameter"
+            message("common_actions_pvr", m, "warning", None, None)
+        request.pvr_chunkoffset = chunkoffset
+        message("common_actions_pvr", "Chunkoffset: %s" % chunkoffset, "debug",None, None)
+
+        return func(**kwargs)
+    return wrapper
+
+
+def print_headers(r):
+    res = "["
+    for k,v in r.headers.iteritems():
+      res = res + str(k) + ":" + str(v) + ", "
+    res = res + "]"
+    return res
+
+
+def dump_hex(data):
+    res = ""
+    for i in data:
+        res = res + i.encode("hex") + " "
+    return res
+
+
+def signal_term_handler(signal, frame):
+    print 'Stoppping server ... '
+    m = "Signal number %s detected. Stoppping server" % str(signal)
+    message("signal_term_handler", m, "INFO", None, None)
+    sys.exit(0)
+
+def signal_hup_handler(signal, frame):
+    print 'Reloading server ... '
+    m = "Signal number %s detected. Reloading server" % str(signal)
+    message ("signal_hup_handler",  m, "INFO", None, None)
+
+
+signal.signal(signal.SIGINT, signal_term_handler)
+signal.signal(signal.SIGTERM, signal_term_handler)
+signal.signal(signal.SIGUSR1, signal_hup_handler)
+signal.signal(signal.SIGHUP, signal_hup_handler)
+
+
 def get_flv_stream(path, offset=0, _id=None, tmp_dir="./tmp/flunnt/flv/offsets/"):
   m = "Init (%s, %s, %s) " % (path, offset, tmp_dir)
   message("get_flv_stream", m, "info", _id, None)
   try:
     f = open( path , 'r')
-    
     seeking_entry_point = True
-    
     header = '''FLV\x01\x05\x00\x00\x00\x09'''
     yield header
-    
+
     hits = 0
     counter_loops = 0
-    
     while True:
       counter_loops = (counter_loops + 1 ) % 50000
       if seeking_entry_point:
 
           if counter_loops == 1:
-              m = "Seeaking entry point for FLV media type"
+              m = "Seeking entry point for FLV media type"
               message("get_flv_stream", m, "INFO",_id, None)
           data = f.read(368) # 23 * 4 * 3
-                  
           data_find = data.find("\x00\x00\x00\x00")
           if data_find > 11 and (len(data) > data_find + 4 ) and data[data_find-7] in ["\x09", ]: # ["\x08","\x09","\x12", ]:
 
@@ -210,9 +349,9 @@ def get_flv_stream(path, offset=0, _id=None, tmp_dir="./tmp/flunnt/flv/offsets/"
                  continue
               # Un saludo. Nos vemos en el futuro.
               r = data[data_find-11:]
-              
+
               timestamp = int(  r[8:11].encode('hex'), 16  )  / 1000.0
-              
+
               if timestamp > offset:
                   hits = hits + 1
               else:
@@ -240,31 +379,20 @@ def get_flv_stream(path, offset=0, _id=None, tmp_dir="./tmp/flunnt/flv/offsets/"
                   yield r
                   seeking_entry_point = False
                   message("get_flv_stream", "Offset reached", "DEBUG",_id, None)
-
-
-
-
       else:
               data = f.read(32768)
               yield data
-      
+
       if len(data) == 0:
           m = "Reached end of file"
           message("get_flv_stream", m, "DEBUG",_id, None)
           break
-    
+
     f.close()
   except Exception,e:
     m = "Exception: %s " % repr(e)
     message("get_flv_stream", m, "info", _id, None)
     f.close()
-
-
-
-
-
-
-
 
 
 def get_mp4_stream(path, offset=0, _id=None, tmp_dir="./tmp/flunnt/mp4/offsets/"):
@@ -327,7 +455,6 @@ def get_mp4_stream(path, offset=0, _id=None, tmp_dir="./tmp/flunnt/mp4/offsets/"
                 if attempt > 3:
                     raise e
                 time.sleep(3)
-            message("get_mp4_stream", "sdsdasda", "info", _id, None)
 
             try:
                 m = "Removing %s temporary file" % (offset_file)
@@ -368,7 +495,7 @@ def get_mp4_stream(path, offset=0, _id=None, tmp_dir="./tmp/flunnt/mp4/offsets/"
 
         m = "Ready to streaming"
         message("get_mp4_stream", m, "info", _id, None)
-    
+
         for i in f:
             yield i
     except Exception, e:
@@ -507,6 +634,9 @@ def pvr_hls(chunkoffset,channel_id, starttime, endtime=None):
 
   is_live = False if endtime else True
 
+  m =  "Live streaming: %s" % is_live
+  message("pvr_hls", m, "debug", None, None)
+
   # TODO: Habria que establecer un tiempo de margen en el starttime
   # por el cual se considera que una petición es demasiado antigua en el
   # tiempo con respecto al time del primer chunk encontrado.
@@ -581,9 +711,8 @@ def pvr_hls(chunkoffset,channel_id, starttime, endtime=None):
   # fetching the chunks with current_chunk_number 
   previous_chunk_number=None
   while True:
-      if chunks_needed <= 0 is is_live:
+      if chunks_needed <= 0 and is_live:
           break
-
 
       if position >= len(files):
           break
@@ -599,7 +728,7 @@ def pvr_hls(chunkoffset,channel_id, starttime, endtime=None):
           position == position + 1
           continue
 
-      if feched and endtime and endtime < timestamp:
+      if feched and endtime and (float(endtime) < float(timestamp)):
           m = "End time reached"
           message("pvr_hls", m, "INFO", None, None)
           break
@@ -634,7 +763,6 @@ def pvr_hls(chunkoffset,channel_id, starttime, endtime=None):
               m = "Discontinuity found"
               message("pvr_hls", m, "INFO", None, None)
               break
-
 
   m = "Chunks found"
   message("pvr_hls", m, "debug", None, None)
@@ -740,7 +868,6 @@ def reencapsulation_http(source, format="flv"):
 def pvr_http(timer,channel_id,stream_limited=True):
   _id=time.time()
 
-
   response.content_type = 'video/mpeg2'
 
   # TODO: Habria que establecer un tiempo de margen en el timer
@@ -789,8 +916,6 @@ def pvr_http(timer,channel_id,stream_limited=True):
   duration=None
   previous_chunk_number=None
 
-
-      
   delay = 0
   waitings = 0
   while streaming:
@@ -897,10 +1022,8 @@ def pvr_http(timer,channel_id,stream_limited=True):
       t_c = 0
       while True:
           data = f.read(int(speed / 16.0))
-                    
           if not data:
               break
-              
           yield data
           if stream_limited:
             t_c = t_c + 0.0625
@@ -935,9 +1058,9 @@ def vod_http_partial_content(media_id, offset_min=0, offset_max=None, session_id
   '''
   try:
     try:
-      _id = float(session_id)
+      _id = str(session_id)
     except Exception:
-      _id=time.time()
+      _id = str(time.time())
 
     try:
       offset = int(offset)
@@ -1028,10 +1151,6 @@ def vod_http_partial_content(media_id, offset_min=0, offset_max=None, session_id
      yield abort(500, m)
 
 
-
-
-
-
 def vod_http(media_id, offset=0, session_id=None,stream_limited=True):
  '''
   offset=seconds (float)
@@ -1041,9 +1160,9 @@ def vod_http(media_id, offset=0, session_id=None,stream_limited=True):
  '''
  try:
   try:
-      _id = float(session_id)
+      _id = str(session_id)
   except Exception:
-      _id=time.time()
+      _id= str(time.time())
 
   try:
       offset = float(offset)
@@ -1156,41 +1275,35 @@ parser.add_option("-i", "--ip", dest="ip",
         default="127.0.0.1")
 
 parser.add_option("-p", "--port", dest="port",
-       help="Listen port (default: 9002)",
-       default=9002, type="int")
+        help="Listen port (default: 9002)",
+        default=9002, type="int")
 
 parser.add_option("-T", "--cachetimeout", dest="cachetimeout",
-       help="Cache timeout (default: 10). Must be minor than \
+        help="Cache timeout (default: 10). Must be minor than \
 maxchunkduration value",
-       default=10, type="int")
+        default=10, type="int")
 
 parser.add_option("-M", "--maxchunkduration", dest="maxchunkduration",
-       help="Chunk duration (default: 30)",
-       default=30, type="int")
+        help="Chunk duration (default: 30)",
+        default=30, type="int")
 
 parser.add_option("-F", "--fastcgi",
         action="store_true", dest="fcgi", default=False,
         help="Run as FastCGI server")
 
 parser.add_option("--loglevel",
-                dest="loglevel", help="Log level (default: %s)" % LOG_LEVEL,
-                default=LOG_LEVEL, type="int")
+        dest="loglevel", help="Log level (default: %s)" % LOG_LEVEL,
+        default=LOG_LEVEL, type="int")
 
 parser.add_option("-L", "--logfile",
         dest="logfile", default=LOG_FILE,
         help="Log file (default: %s)" % LOG_FILE)
 
 parser.add_option("-c", "--chunkstoserve", dest="chunkstoserve",
-       help="Chunks to serve (default: 4)",
-       default=4, type="int")
+        help="Chunks to serve (default: 4)",
+        default=4, type="int")
 
 (ops, args) = parser.parse_args()
-
-# if sys.argv.__len__() > 1:
-#     (ops, sys.argv) = parser.parse_args()
-# else:
-#     parser.print_help()
-#     exit (-1)
 
 
 ################################################################################
@@ -1221,13 +1334,8 @@ message("main", m, "INFO", None, None)
 ################################################################################
 
 
-
-# @hook('after_request')
-# def enable_cors():
-#     print "Hola"
-
-
 @route(PREFIX_PATH +  '/crossdomain.xml')
+@get_session
 def crossdomain_xml():
     res = '''
 <?xml version="1.0"?>
@@ -1241,13 +1349,13 @@ def crossdomain_xml():
 
 
 @route(PREFIX_PATH +  '/reencapsulation/:format_')
+@get_session
 def reencapsulation_http_url(format_):
     source = ""
     if request.GET.get('source'):
         source = request.GET.get('source')
     m = "Source: " + source
     message("reencapsulation_http_url", m, "debug",None, None)
-
     return reencapsulation_http(source, format_)
 
 
@@ -1255,150 +1363,11 @@ def reencapsulation_http_url(format_):
 def pvr_channels():
   """
   """
-
+  response.content_type = 'application/json'
   files = get_listdir(ops.workdir + "/pvr/ts/" )
-
   res = {}
   res["channels"] = files
-
   return res
-
-
-@route(PREFIX_PATH +  '/pvr/:channel_id/hls.m3u8')
-def pvr_hls_parameters(channel_id):
-  """
-  For example:
-    channel_id = divinity_udp_239.192.201.5_1234
-    or
-    channel_id = divinitybyhttp
-  """
-
-  # Securization of channel_id value.
-  channel_id = securing_string(channel_id)
-
-  if not os.path.exists(ops.workdir + "/pvr/ts/" + str(channel_id)):
-      return abort(404, "Channel id. not found")
-
-  # Suring access to files entries cached
-  timer = int(time.time()) - ops.maxchunkduration * 2
-  endtime = None
-
-  if request.GET.get('time'):
-      timer = request.GET.get('time')
-  else:
-      m = "Not time parameter received"
-      message("pvr_hls_parameters", m, "debug", None, None)
-
-      # date example: 2011-10-14_5:29:43
-      if request.GET.get('date'):
-            date = request.GET.get('date')
-            try:
-                date_object = datetime.strptime(date, '%Y-%m-%d_%H:%M:%S')
-                timer = int(calendar.timegm(date_object.utctimetuple()))
-            except ValueError:
-                m = "Incorrect date format. Expected: %Y-%m-%d_%H:%M:%S"
-                message("pvr_hls_parameters", m, "warning",None, None)
-      else:
-          m = "Not date parameter received"
-          message("pvr_hls_parameters", m, "debug",None, None)
-
-  if request.GET.get('endtime'):
-      endtime = request.GET.get('endtime')
-  else:
-      m = "Not endtime parameter received"
-      message("pvr_hls_parameters", m, "debug",None, None)
-
-      # enddate example: 2011-10-14_5:29:43
-      if request.GET.get('enddate'):
-            enddate = request.GET.get('enddate')
-            try:
-                enddate_object = datetime.strptime(enddate, '%Y-%m-%d_%H:%M:%S')
-                endtime = int(calendar.timegm(enddate_object.utctimetuple()))
-            except ValueError:
-                m = "Incorrect enddate format. Expected: %Y-%m-%d_%H:%M:%S"
-                message("pvr_hls_parameters", m, "warning",None, None)
-      else:
-          m = "No enddate parameter received"
-          message("pvr_hls_parameters", m, "debug",None, None)
-
-  chunkoffset = 1
-  try:
-      chunkoffset = int(request.GET.get('chunkoffset'))
-  except Exception, e:
-      m = "Not chunkoffset parameter received"
-      message("pvr_hls_parameters", m, "debug",None, None)
-
-  return pvr_hls(chunkoffset,channel_id, timer, endtime)
-
-
-@route(PREFIX_PATH +  '/pvr/:channel_id/:date/hls.m3u8')
-def pvr_hls_url_start(channel_id, date):
-  """
-  For example:
-    channel_id = divinity_udp_239.192.201.5_1234
-    or
-    channel_id = divinitybyhttp
-
-    date: %Y-%m-%d_%H:%M:%S
-  """
-
-  # Securization of channel_id value.
-  channel_id = securing_string(channel_id)
-
-  if not os.path.exists(ops.workdir + "/pvr/ts/" + str(channel_id)):
-      return abort(404, "Channel id. not found")
-
-  # Suring access to files entries cached
-  timer = int(time.time()) - ops.maxchunkduration * 2
-
-  try:
-      date_object = datetime.strptime(date, '%Y-%m-%d_%H:%M:%S')
-      timer = int(calendar.timegm(date_object.utctimetuple()))
-  except ValueError:
-      m = "Incorrect date format. Expected: %Y-%m-%d_%H:%M:%S"
-      message("pvr_hls_parameters", m, "warning",None, None)
-
-  return pvr_hls(1,channel_id, timer, None)
-
-
-
-@route(PREFIX_PATH +  '/pvr/:channel_id/:date/:enddate/hls.m3u8')
-def pvr_hls_url_start_end(channel_id, date, enddate):
-  """
-  For example:
-    channel_id = divinity_udp_239.192.201.5_1234
-    or
-    channel_id = divinitybyhttp
-
-    date and enddate: %Y-%m-%d_%H:%M:%S
-  """
-
-  # Securization of channel_id value.
-  channel_id = securing_string(channel_id)
-
-  if not os.path.exists(ops.workdir + "/pvr/ts/" + str(channel_id)):
-      return abort(404, "Channel id. not found")
-
-  # Suring access to files entries cached
-  timer = int(time.time()) - ops.maxchunkduration * 2
-  endtime = None
-
-  try:
-      date_object = datetime.strptime(date, '%Y-%m-%d_%H:%M:%S')
-      timer = int(calendar.timegm(date_object.utctimetuple()))
-  except ValueError:
-      m = "Incorrect date format. Expected: %Y-%m-%d_%H:%M:%S"
-      message("pvr_hls_parameters", m, "warning",None, None)
-
-  try:
-      enddate_object = datetime.strptime(enddate, '%Y-%m-%d_%H:%M:%S')
-      endtime = int(calendar.timegm(enddate_object.utctimetuple()))
-  except ValueError:
-      m = "Incorrect enddate format. Expected: %Y-%m-%d_%H:%M:%S"
-      message("pvr_hls_parameters", m, "warning",None, None)
-
-  return pvr_hls(1,channel_id, timer, endtime)
-
 
 
 @route(PREFIX_PATH +  '/pvr/:channel_id/segments')
@@ -1417,7 +1386,6 @@ def pvr_segments(channel_id):
       return abort(404, "Channel id. not found")
 
   files = get_listdir(ops.workdir + "/pvr/ts/" + str(channel_id))
-
 
   res = {}
   extra = {}
@@ -1492,61 +1460,90 @@ def pvr_segments(channel_id):
   segment["num_of_chunks"] = segment_num_of_chunks
   segments.append(segment)
 
-
   res["extra"] = extra
   res["segments"] = segments
   return res
 
+@route(PREFIX_PATH +  '/pvr/:channel_id/playlist.m3u8')
+@route(PREFIX_PATH +  '/pvr/:channel_id/:date/playlist.m3u8')
+@route(PREFIX_PATH +  '/pvr/:channel_id/:date/:enddate/playlist.m3u8')
+@get_session
+def pvr_hls_playlist(channel_id, date=None, enddate=None):
+  """
+  For example:
+    channel_id = divinity_udp_239.192.201.5_1234
+    or
+    channel_id = divinitybyhttp
+    date and enddate: %Y-%m-%d_%H:%M:%S
+    time and endtime: 1400665691
 
+
+    Returns something like:
+
+    EXTM3U
+    #EXT-X-VERSION:3
+    #EXT-X-STREAM-INF:PROGRAM-ID=1
+    hls.m3u8?session=9daa2446836f4a7f92af6108f0be64b0
+
+  """
+  m3u8 = ""
+  try:
+    params = request.query_string
+    new_params = ""
+    for p in params.split("&"):
+        if not p.count("session=") > 0:
+            new_params = new_params + p + "&"
+    new_params = new_params + "session=" + request.session_id
+
+    m3u8 = "#EXTM3U\n"
+    m3u8 = m3u8 + "#EXT-X-VERSION:3\n"
+    m3u8 = m3u8 + "#EXT-X-STREAM-INF:PROGRAM-ID=1\n"
+    m3u8 = m3u8 + "hls.m3u8?" + new_params + "\n"
+  except Exception, e:
+      m = str(e)
+      message("pvr_hls_playlist", m, "error", None, None)
+
+  response.content_type = 'application/x-mpegURL'
+  return m3u8
+
+@route(PREFIX_PATH +  '/pvr/:channel_id/hls.m3u8')
+@route(PREFIX_PATH +  '/pvr/:channel_id/:date/hls.m3u8')
+@route(PREFIX_PATH +  '/pvr/:channel_id/:date/:enddate/hls.m3u8')
+@get_session
+@common_actions_pvr
+def pvr_hls_url_start_end(channel_id, date=None, enddate=None):
+  """
+  For example:
+    channel_id = divinity_udp_239.192.201.5_1234
+    or
+    channel_id = divinitybyhttp
+    date and enddate: %Y-%m-%d_%H:%M:%S
+    time and endtime: 1400665691
+  """
+  return pvr_hls(request.pvr_chunkoffset,request.pvr_channel_id,
+          request.pvr_timer, request.pvr_endtimer)
 
 
 @route(PREFIX_PATH +  '/pvr/:channel_id/media.ts')
+@get_session
+@common_actions_pvr
 def pvr_http_parameters(channel_id):
   """
   For example:
     channel_id = divinity_udp_239.192.201.5_1234
     or
     channel_id = divinitybyhttp
-    
+
     parameters:
-    
        time=timestamp
        date=%Y-%m-%d_%H:%M:%S
   """
-
-  # Securization of channel_id value.
-  channel_id = securing_string(channel_id)
-
-  if not os.path.exists(ops.workdir + "/pvr/ts/" + str(channel_id)):
-      return abort(404, "Channel id. not found")
-
-  # Suring access to files entries cached
-  timer = int(time.time()) - ops.maxchunkduration * 1
-
-  if request.GET.get('time'):
-     timer = request.GET.get('time')
-  else:
-      m = "Not time parameter received"
-      message("pvr_http_parameters", m, "debug",None, None)
-      # date example: 2011-10-14_5:29:43
-      if request.GET.get('date'):
-            date = request.GET.get('date')
-            try:
-                date_object = datetime.strptime(date, '%Y-%m-%d_%H:%M:%S')
-                timer = int(calendar.timegm(date_object.utctimetuple()))
-            except ValueError:
-                m = "Incorrect date format. Expected: %Y-%m-%d_%H:%M:%S"
-                message("pvr_http_parameters", m, "warning",None, None)
-
-      else:
-          m = "Not date parameter received"
-          message("pvr_http_parameters", m, "debug",None, None)
-
-  return  pvr_http(timer,channel_id)
-
+  return pvr_http(request.pvr_timer,request.pvr_channel_id)
 
 
 @route(PREFIX_PATH +  '/pvr/:channel_id/:date')
+@get_session
+@common_actions_pvr
 def pvr_http_url(channel_id, date):
   """
   For example:
@@ -1554,29 +1551,13 @@ def pvr_http_url(channel_id, date):
     or
     channel_id = divinitybyhttp
   """
-
-  # Securization of channel_id value.
-  channel_id = securing_string(channel_id)
-
-  if not os.path.exists(ops.workdir + "/pvr/ts/" + str(channel_id)):
-      return abort(404, "Channel id. not found")
-
-  timer = int(time.time()) - ops.maxchunkduration * 1
-  try:
-      date_object = datetime.strptime(date + "_UTC" , '%Y-%m-%d_%H:%M:%S_%Z')
-      timer = int(calendar.timegm(date_object.utctimetuple()))
-  except ValueError:
-      m = "Incorrect date format. Expected: %Y-%m-%d_%H:%M:%S"
-      message("pvr_http_url", m, "warning",None, None)
-
-      if not os.path.exists(ops.workdir + "/pvr/ts/" + str(channel_id)):
-          return abort(400, "Incorrect date format. Expected: %Y-%m-%d_%H:%M:%S")
-
-  return pvr_http(timer,channel_id)
+  return pvr_http(request.pvr_timer,request.pvr_channel_id)
 
 
 @route(PREFIX_PATH + '/play')
 @route(PREFIX_PATH + '<path:path>')
+@get_session
+@common_actions_vod
 def vod_http_parameters(path=None):
   """
   Parameters:
@@ -1588,44 +1569,18 @@ def vod_http_parameters(path=None):
   """
   try:
 
-    session_id = None
-    if request.GET.get('session'):
-      session_id = request.GET.get('session')
-    try:
-        session_id = float(session_id)
-    except Exception:
-        session_id=time.time()
+    session_id = request.session_id
+    mo = request.mo
 
-    m = "Request parameters: " + repr(request.query_string)
-    message("vod_http_parameters", m, "info", session_id, None)
+    media_path = ops.workdir + "/videos/" + str(mo)
+    response.set_header('Accept-Ranges', 'bytes')
+    length = os.path.getsize(media_path)
+    response.set_header('Content-Length', length)
+    http_range_header =  \
+      request.get_header("Range", default=None)
+    # Range: bytes=0-999
+    # Range: bytes=1000-
 
-    m = "Request Method: " + request.method
-    message("vod_http_parameters", m, "info", session_id, None)
-
-    m = "Request Headers: " + print_headers(request)
-    message("vod_http_parameters", m, "info", session_id, None)
-
-    mo = ""
-    if path:
-        mo = path
-    if request.GET.get('mo'):
-      mo = request.GET.get('mo')
-    mo = securing_string(mo)
-
-    http_range_header = None
-    if not os.path.exists(ops.workdir + "/videos/" + str(mo)):
-        m = "mo not found: %s" % ops.workdir + "/videos/" + str(mo)
-        message("vod_http_parameters", m, "warning",None, None)
-        return abort(404, "mo. not found")
-    else:
-        media_path = ops.workdir + "/videos/" + str(mo)
-        response.set_header('Accept-Ranges', 'bytes')
-        length = os.path.getsize(media_path)
-        response.set_header('Content-Length', length)
-        http_range_header =  \
-          request.get_header("Range", default=None)
-        # Range: bytes=0-999
-        # Range: bytes=1000-
     try:
        offset = float(long(request.GET.get('tstart')) / 1000.0)
     except Exception:
@@ -1656,7 +1611,7 @@ def vod_http_parameters(path=None):
             # res = HTTPResponse(body=res_body, status=200)
             m = "Partial content (206) Response Headers: \
                " + print_headers(response)
-            message("vod_http_parameters", m, "info", session_id, None)
+            message("vod_http_parameters", m, "debug", session_id, None)
     else:
         # Si hay parametro tstart valido entonces obviamos el
         # posicionamiento por cabeceras Range
@@ -1673,6 +1628,22 @@ def vod_http_parameters(path=None):
   message("vod_http_parameters", m, "info", session_id, None)
 
   return res
+
+
+@route(PREFIX_PATH +  '/server/status')
+def server_status():
+  global STREAMS_STATUS
+  """
+  """
+
+  from json import dumps
+  response.content_type = 'application/json'
+
+  res = {}
+  res["streams"] = STREAMS_STATUS
+
+  return res
+
 
 
 
