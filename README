@@ -6,6 +6,7 @@ Depends:
  python: 2.6  at least
  bottle: 0.11.5 at least
  paste:  1.7.5.1 at least
+ requests: 2.3.0 at least
  ffmpeg 
  imagemagick
 
@@ -13,7 +14,7 @@ Installation::
 
  * adduser fluunt
  * mkdir /var/log/fluunt
- * mkdir /mnt/vod/fluunt
+ * mkdir -p /mnt/vod/fluunt
  * mkdir -p /mnt/vod/fluunt/pvr/ts
  * mkdir -p /mnt/vod/fluunt/videos
  * cd /opt
@@ -22,15 +23,31 @@ Installation::
  * chown -R fluunt.fluunt /mnt/vod/fluunt
  * chown -R fluunt.fluunt /opt/fluunt
 
-Watchdog::
+just for fluunt-image-server::
+
+ * mkdir -p /mnt/images/fluunt/
+ * mkdir -p /mnt/images/fluunt/local
+ * chown -R fluunt.fluunt /mnt/images
+ 
+fluunt-server watchdog::
 
   (cronjobs)
   0   7,2 * * * root /opt/fluunt/tools/fluunt-watchdog 127.0.0.1 8000 /mnt/vod/fluunt /pvr/ts check.txt force > /dev/null 2&>1
   */1 * * * *   root /opt/fluunt/tools/fluunt-watchdog 127.0.0.1 8000 /mnt/vod/fluunt /pvr/ts check.txt > /dev/null 2&>1
+  (examples of cronjobs for fluunt-image-server)
+  5   */2 * * * root rm /mnt/images/fluunt/tmp/* > /dev/null 2>&1
+  20  0   * * * root find /mnt/images/fluunt/cache/ -mtime 1 -exec rm  {} \;  > /dev/null 2>&1
 
-Start:: 
+fluunt-server start:: 
 
   /opt/fluunt/tools/fluunt-watchdog 127.0.0.1 8000 /mnt/vod/fluunt /pvr/ts check.txt force
+
+fluunt-image-server start:: 
+  /opt/fluunt/tools/fluunt-image-server --loglevel 30 -i 0.0.0.0 -p 5555 \
+    -w /mnt/images/fluunt/ -l /mnt/images/fluunt/local/ \
+    -L /var/log/fluunt/flunnt-image-server.log \
+    --accesslogfile=/var/log/fluunt/flunnt-image-server_access.log \
+    --defaultcachetime=36000
 
 Logging::
 
