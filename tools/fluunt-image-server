@@ -1,0 +1,264 @@
+#! /usr/bin/env python
+
+import xml.dom.minidom
+import logging
+import time
+import random
+import socket
+import base64
+import requests
+
+import os
+import sys
+import shutil
+import subprocess
+import hashlib
+
+import bottle
+
+from bottle import route, run, view
+# from bottle import hook
+from bottle import abort, request, response
+from bottle import HTTPResponse
+from bottle import static_file
+
+from optparse import OptionParser
+
+DEV_NULL=open('/dev/null', "w")
+LOG_FILE = "./fluunt-image-server.log"
+ACCESS_LOG_FILE = "./fluunt-image-server_access.log"
+LOG_LEVEL = 20
+DEFAULT_PORT = 9004
+
+###############################################################################
+
+def prepare_cache(filename):
+    result_image = filename
+    result_image_prefix = filename[:2]
+    try:
+        os.mkdir(ops.workdir + "/cache/" + result_image_prefix)
+    except OSError, e:
+        pass
+    result_image_abs_path = \
+        ops.workdir + "/cache/" + result_image_prefix + "/" + result_image
+    original_image_abs_path = ops.workdir + "/tmp/" + filename
+    return original_image_abs_path,result_image_abs_path
+
+
+def get_file(url,original_image_abs_path):
+    global logger
+    logger.debug("url: " + url)
+    if url.count("://"):
+        logger.debug("Get a remote URL")
+        try:
+            r = requests.get(url)
+            f =open(original_image_abs_path, "w+")
+            for t in r.iter_content(chunk_size=10240, decode_unicode=False):
+                f.write(t)
+            f.close()
+            return True
+        except Exception, e:
+            logger.debug("Unexpected error: %s" % e)
+            return False
+    else:
+        logger.debug("Get a local file")
+        f = ops.localimages + "/" + url
+        if os.path.isfile(f):
+            shutil.copy(f,original_image_abs_path)
+            return True
+    return False
+
+
+def generate_md5sum_filename(params):
+    global logger
+    
+    name = ""
+    name += str(params["action"]) if params.has_key("action") else "none"
+    name += str(params["url"]) if params.has_key("url") else "none"
+    name += str(params["height"]) if params.has_key("height") else "none"
+    name += str(params["width"]) if params.has_key("width") else "none"
+    name += str(params["overshadow"]) if params.has_key("overshadow") else "none"
+    name += str(params["opacity"]) if params.has_key("opacity") else "none"
+    name += str(params["bgcolor"]) if params.has_key("bgcolor") else "none"
+    logger.debug("Cache filename: %s" % name)
+    m = hashlib.md5()
+    m.update(name)
+    res = m.hexdigest()
+    logger.debug("Generated md5sum filename: %s" % res)
+    return res
+
+
+def is_filename_in_cache(filename, timeout=-1):
+    global logger
+    filename_prefix = filename[:2]
+    f_name = ops.workdir + "/cache/" + filename_prefix + "/" + filename
+    if os.path.isfile(f_name):
+        if timeout == -1:
+            logger.debug("%s: Cache inhibited" % filename)
+            return False
+        elif time.time() - timeout < os.stat(f_name).st_mtime:
+            logger.debug("%s: In cache for %s seconds)" % (filename,timeout))
+            return True
+    logger.debug("%s: Not in cache" % filename)
+    return False
+
+
+###############################################################################
+
+@route('/generator/ligc_esi/resize')
+def generator_ligc_esi_resize():
+    
+    params = {}
+    params["action"] = "resize"
+    params["timeout"] = ops.defaultcachetime
+    if request.GET.get('timeout'):
+        params["timeout"] = int(request.GET.get('timeout'))
+    params["height"] = 100
+    if request.GET.get('height'):
+        params["height"] = int(request.GET.get('height'))
+    params["width"] = 100
+    if request.GET.get('width'):
+        params["width"] = int(request.GET.get('width'))
+    params["url"] = ""
+    if request.GET.get('url'):
+        params["url"] = request.GET.get('url')
+    params["overshadow"] = None
+    if request.GET.get('overshadow'):
+        params["overshadow"] = request.GET.get('overshadow')
+    params["opacity"] = None
+    if request.GET.get('opacity'):
+        params["opacity"] = request.GET.get('opacity')
+    params["bgcolor"] = "transparent"
+    if request.GET.get('bgcolor'):
+        params["bgcolor"] = request.GET.get('bgcolor')
+    
+    md5sum_filename = \
+       generate_md5sum_filename(params) # ej: 750726b7df78e9401068b623d47bbf73
+
+    if is_filename_in_cache(md5sum_filename, params["timeout"]):
+        return static_file(md5sum_filename[:2] + "/" + md5sum_filename,
+            root=ops.workdir+"/cache", mimetype='image/png')
+    
+    original_image_abs_path, result_image_abs_path = \
+        prepare_cache(md5sum_filename)
+    
+    if not get_file(params["url"],original_image_abs_path):
+        return abort(404, "Can not found media: %s" % params["url"])
+    
+    size = " %sx%s " % (params["width"],params["height"])
+    overshadow_cmd = ""
+    if params["overshadow"]:
+        overshadow_cmd = " -size " + size + \
+        " xc:#000 -alpha on -compose dissolve -define compose:args=" + \
+        params["overshadow"] + " -composite "
+    
+    opacity_cmd = ""
+    if params["opacity"]:
+      opacity_cmd = " -alpha set -channel A -fx 'u*" + params["opacity"] + "/100' "
+    
+    cmd = "convert -background '" + params["bgcolor"] + "' -gravity center " + \
+           "-resize " + size + \
+           "-extent " + size + \
+           "-quality 95" + " " + \
+           original_image_abs_path + " " + \
+           opacity_cmd +  \
+           overshadow_cmd +  \
+           result_image_abs_path
+    
+    logger.debug("Command executed: " + cmd)
+    convert = subprocess.Popen(cmd.split(), shell=False, bufsize=1024,
+         stdin=subprocess.PIPE, stdout=DEV_NULL,
+         stderr=subprocess.PIPE, close_fds=True)
+    convert.wait()
+
+    return static_file(result_image_abs_path, root="/", mimetype='image/png')
+    
+    
+    
+###############################################################################
+
+
+parser = OptionParser()
+
+parser.add_option("-w", "--workdir", dest="workdir", default=".",
+        help="Work directory (default: .)")
+parser.add_option("-l", "--localimages", dest="localimages", default="./localimages",
+        help="Local directory (default: .) for images repository")
+parser.add_option("-i", "--ip", dest="ip",
+        help="Listen IP (default: 127.0.0.1)",
+        default="127.0.0.1")
+parser.add_option("-p", "--port", dest="port",
+        help="Listen port (default: %s)" % DEFAULT_PORT,
+        default=DEFAULT_PORT, type="int")
+parser.add_option("-F", "--fastcgi",
+        action="store_true", dest="fcgi", default=False,
+        help="Run as FastCGI server")
+parser.add_option("--loglevel",
+        dest="loglevel", help="Log level (default: %s)" % LOG_LEVEL,
+        default=LOG_LEVEL, type="int")
+parser.add_option("-L", "--logfile",
+        dest="logfile", default=LOG_FILE,
+        help="Log file (default: %s)" % LOG_FILE)
+parser.add_option("--accesslogfile",
+        dest="accesslogfile", default=ACCESS_LOG_FILE,
+        help="Access log file (default: %s)" % ACCESS_LOG_FILE)
+parser.add_option("--defaultcachetime",
+        dest="defaultcachetime", help="Default cache time (default: %s)" % 3600,
+        default=3600, type="int")
+
+(ops, args) = parser.parse_args()
+
+
+
+# logging ######################################################################
+hdlr = logging.FileHandler(ops.logfile)
+hdlr.setFormatter(logging.Formatter('%(levelname)s %(asctime)s %(filename)s %(lineno)d %(funcName)s %(message)s'))
+
+logger = logging.getLogger('limgenserver')
+logger.addHandler(hdlr)
+logger.setLevel(ops.loglevel)
+
+hdlr_wsgi = logging.FileHandler(ops.accesslogfile)
+logger_wsgi = logging.getLogger('wsgi')
+logger_wsgi.addHandler(hdlr_wsgi)
+
+# setting up ###################################################################
+logger.info("Default encoding: %s" % sys.getdefaultencoding())
+logger.info("Starting server")
+logger.info("Verbosity level set to: %s" % ops.loglevel)
+
+try:
+    os.mkdir(ops.workdir)
+except OSError, e:
+    logger.info("Warning:" + str(e))
+try:
+    os.mkdir(ops.workdir + "/tmp")
+except OSError, e:
+    logger.info("Warning:" + str(e))
+try:
+    os.mkdir(ops.workdir + "/cache")
+except OSError, e:
+    logger.info("Warning:" + str(e))
+try:
+    os.mkdir(ops.localimages)
+except OSError, e:
+    logger.info("Warning:" + str(e))
+
+################################################################################
+
+
+
+###############################################################################
+
+
+if __name__ == '__main__':
+    if ops.fcgi:
+        bottle.run(server=bottle.FlupFCGIServer, port=ops.port, host=ops.ip)
+    else:
+        # bottle.run(host=ops.ip, port=ops.port)
+        # bottle.run(server=bottle.CherryPyServer, port=ops.port, host=ops.ip, 200)
+        bottle.run(server=bottle.PasteServer, port=ops.port, host=ops.ip,
+                quiet=True,
+                use_threadpool=True, threadpool_workers=150)
+
+

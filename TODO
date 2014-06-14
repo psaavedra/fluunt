@@ -1,6 +1,6 @@
 - VoD Streaming
   - tstart para posicionamiento: TS, FLV, MP4
-- El servidor conoce y tiene datos acerca de las conexiones activas
+- El servidor conoce y tiene datos acerca de las conexiones activas - DONE
 - Servicio de tickets
   - Existe un servicio central para los servers para consultar si un medio
     esta protegido por ticket
@@ -15,3 +15,4 @@
 - Fichero de configuración para el recorder
 - Limite inferior para la reproduccion (si la peticion es de muy del pasado,
   no se hae play)
+- Listado de dominios restringidos para el image-server

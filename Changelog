@@ -1,3 +1,8 @@
 Version 0.0.0
     FUNCT: Initial release
-
+Version 0.1.0
+    FUNCT: Image server with resize
+    FUNCT: Current streams monitor
+    FUNCT: HLS and HLS time-shift
+    FUNCT: HTTP Partial Content (206)
+    

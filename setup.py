@@ -1,6 +1,6 @@
 from setuptools import setup, find_packages
 
-version = "0.0.0"
+version = "0.1.0"
 
 long_description = ""
 try:
@@ -18,7 +18,7 @@ except Exception:
 setup(
     name = 'fluunt',
     version = version,
-    description = 'Video stream server (HLS, HTTP, HTTP-FLV, time-shift)',
+    description = 'Video stream server (HLS, HTTP, HTTP-FLV, time-shift, image server)',
     author = 'Pablo Saavedra',
     author_email = 'pablo.saavedra@treitos.com',
     url = 'http://github.com/psaavedra/fluunt',
@@ -32,13 +32,17 @@ setup(
     scripts=[
         "tools/fluunt-server",
         "tools/fluunt-cleaner",
-        "tools/fluunt-recorder"
+        "tools/fluunt-recorder",
+        "tools/fluunt-image-server",
+        "tools/fluunt-watchdog",
     ],
     data_files=[
         ('share/doc/fluunt', [
             'doc/fluunt-server.cfg',
             'doc/fluunt-cleaner.cfg',
-            'doc/fluunt-recorder.cfg'
+            'doc/fluunt-recorder.cfg',
+            'README',
+            'AUTHORS',
                 ])
     ],
     download_url= 'https://github.com/psaavedra/fluunt/zipball/master',
@@ -53,5 +57,5 @@ setup(
     ],
     long_description=long_description,
     license=license,
-    keywords = "python stream pvr live h264 mpegts flv hls",
+    keywords = "python stream pvr live h264 mpegts flv hls images",
 )
