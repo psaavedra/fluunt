@@ -83,7 +83,7 @@ def generate_md5sum_filename(params):
     logger.debug("Cache filename: %s" % name)
     m = hashlib.md5()
     m.update(name)
-    res = m.hexdigest()
+    res = m.hexdigest() + ".png"
     logger.debug("Generated md5sum filename: %s" % res)
     return res
 
@@ -133,7 +133,7 @@ def generator_ligc_esi_resize():
         params["bgcolor"] = request.GET.get('bgcolor')
     
     md5sum_filename = \
-       generate_md5sum_filename(params) # ej: 750726b7df78e9401068b623d47bbf73
+       generate_md5sum_filename(params) # ej: 750726b7df78e9401068b623d47bbf73.png
 
     if is_filename_in_cache(md5sum_filename, params["timeout"]):
         return static_file(md5sum_filename[:2] + "/" + md5sum_filename,
