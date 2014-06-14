@@ -130,7 +130,9 @@ def generator_ligc_esi_resize():
         params["opacity"] = request.GET.get('opacity')
     params["bgcolor"] = "transparent"
     if request.GET.get('bgcolor'):
-        params["bgcolor"] = request.GET.get('bgcolor')
+        bgcolor = request.GET.get('bgcolor')
+        bgcolor = "#" + bgcolor if bgcolor!="transparent" else bgcolor
+        params["bgcolor"] = bgcolor
     
     md5sum_filename = \
        generate_md5sum_filename(params) # ej: 750726b7df78e9401068b623d47bbf73.png
@@ -156,10 +158,10 @@ def generator_ligc_esi_resize():
     if params["opacity"]:
       opacity_cmd = " -alpha set -channel A -fx 'u*" + params["opacity"] + "/100' "
     
-    cmd = "convert -background '" + params["bgcolor"] + "' -gravity center " + \
-           "-resize " + size + \
-           "-extent " + size + \
-           "-quality 95" + " " + \
+    cmd = "convert -background " + params["bgcolor"] + " -gravity center " + \
+           " -resize " + size +\
+           " -extent " + size + \
+           " -quality 95" + " " + \
            original_image_abs_path + " " + \
            opacity_cmd +  \
            overshadow_cmd +  \
