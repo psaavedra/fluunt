@@ -27,7 +27,7 @@ cmdline_parser.add_option("-q", "--quiet",
 
 VERBOSE=ops.verbose
 
-hours_to_substract = int(ops.numhours)
+hours_to_substract = float(ops.numhours)
 
 epoch_now = time.time()
 epoch_limit = epoch_now - (hours_to_substract * 60 * 60)
