@@ -1,6 +1,6 @@
 from setuptools import setup, find_packages
 
-version = "0.1.0"
+version = "1.0.0"
 
 long_description = ""
 try:
@@ -20,14 +20,16 @@ setup(
     version = version,
     description = 'Video stream server (HLS, HTTP, HTTP-FLV, time-shift, image server)',
     author = 'Pablo Saavedra',
-    author_email = 'pablo.saavedra@treitos.com',
+    author_email = 'saavedra.pablo@gmail.com',
     url = 'http://github.com/psaavedra/fluunt',
     packages = find_packages(),
     package_data={
     },
     zip_safe=False,
     install_requires=[
-        "paste",
+        "paste >=1.7.5.1",
+        "requests >=2.3.0",
+        "bottle >=0.11.5"
     ],
     scripts=[
         "tools/fluunt-server",
@@ -37,17 +39,27 @@ setup(
         "tools/fluunt-watchdog",
     ],
     data_files=[
-        ('share/doc/fluunt', [
-            'doc/fluunt-server.cfg',
-            'doc/fluunt-cleaner.cfg',
-            'doc/fluunt-recorder.cfg',
+        ('/usr/share/doc/fluunt', [
             'README',
             'AUTHORS',
+                ]),
+        ('/etc/supervisor/conf.d/', [
+            'cfg/supervisor/fluunt.conf',
+                ]),
+        ('/etc/supervisor/conf.d/', [
+            'cfg/supervisor/fluunt-image-server.conf',
+                ]),
+        ('/etc/logrotate.d/', [
+            'cfg/logrotate/fluunt',
+                ]),
+        ('/etc/cron.d/', [
+            'cfg/crond/fluunt',
                 ])
+
     ],
     download_url= 'https://github.com/psaavedra/fluunt/zipball/master',
     classifiers=[
-        "Development Status :: 2 - Pre-Alpha",
+        "Development Status :: 5 - Production/Stable",
         "Topic :: Multimedia :: Video",
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
@@ -57,5 +69,5 @@ setup(
     ],
     long_description=long_description,
     license=license,
-    keywords = "python stream pvr live h264 mpegts flv hls images",
+    keywords = "python stream pvr live h264 mpegts flv hls images convert",
 )

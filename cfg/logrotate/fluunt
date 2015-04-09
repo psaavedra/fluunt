@@ -1,0 +1,15 @@
+/var/log/fluunt/*.log {
+  daily
+  missingok
+  rotate 52
+  compress
+  delaycompress
+  # notifempty
+  create 640 fluunt fluunt
+  sharedscripts
+  postrotate
+    supervisorctl restart fluunt
+  endscript
+}
+
+

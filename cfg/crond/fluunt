@@ -1,0 +1,4 @@
+# cronjobs for fluunt-image-server
+5   */2 * * * root rm /mnt/images/fluunt/tmp/* > /dev/null 2>&1
+20  0   * * * root find /mnt/images/fluunt/cache/ -mtime 1 -exec rm  {} \;  > /dev/null 2>&1
+

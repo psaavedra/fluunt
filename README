@@ -17,19 +17,27 @@ Installation::
  * mkdir -p /mnt/vod/fluunt
  * mkdir -p /mnt/vod/fluunt/pvr/ts
  * mkdir -p /mnt/vod/fluunt/videos
+ * # Alternative 1:
  * cd /opt
  * git clone https://github.com/psaavedra/fluunt.git fluunt
+ * chown -R fluunt.fluunt /opt/fluunt
+ * # End Alternative 1
+ * # Alternative 2:
+ * pip install fluunt
+ * # End Alternative 2
  * chown -R fluunt.fluunt /var/log/fluunt
  * chown -R fluunt.fluunt /mnt/vod/fluunt
- * chown -R fluunt.fluunt /opt/fluunt
 
 just for fluunt-image-server::
 
  * mkdir -p /mnt/images/fluunt/
  * mkdir -p /mnt/images/fluunt/local
  * chown -R fluunt.fluunt /mnt/images
- 
-fluunt-server watchdog::
+
+Manual git installation
+=======================
+
+fluunt-server watchdog (just for manual git installation)::
 
   (cronjobs)
   0   7,2 * * * root /opt/fluunt/tools/fluunt-watchdog 127.0.0.1 8000 /mnt/vod/fluunt /pvr/ts check.txt force > /dev/null 2&>1
@@ -38,7 +46,7 @@ fluunt-server watchdog::
   5   */2 * * * root rm /mnt/images/fluunt/tmp/* > /dev/null 2>&1
   20  0   * * * root find /mnt/images/fluunt/cache/ -mtime 1 -exec rm  {} \;  > /dev/null 2>&1
 
-fluunt-server start:: 
+fluunt-server start (just for manual git installation):: 
 
   /opt/fluunt/tools/fluunt-watchdog 127.0.0.1 8000 /mnt/vod/fluunt /pvr/ts check.txt force
 
@@ -49,7 +57,7 @@ fluunt-image-server start::
     --accesslogfile=/var/log/fluunt/flunnt-image-server_access.log \
     --defaultcachetime=36000
 
-Logging::
+Logs (just for manual git installation)::
 
   (logrotate)
   /var/log/fluunt/*.log {
@@ -63,3 +71,12 @@ Logging::
   sharedscripts
   }
 
+PIP installation
+================
+
+cat /usr/share/doc/fluunt/README
+apt-get install supervisor
+supervisorctl reread
+supervisorctl update
+supervisorctl start fluunt
+supervisorctl start fluunt-image-server
